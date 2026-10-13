@@ -2,6 +2,7 @@
 
 #include <cstdint>
 #include <cstddef>
+#include <bit>
 
 namespace myrtos {
 
@@ -56,25 +57,9 @@ enum class Status : int32_t {
     StackOverflow = -10
 };
 
-/// Hardware-accelerated / intrinsic count leading zeros for O(1) bitmap scheduling
+/// Portable C++20 bit scan; zero has 32 leading zeros.
 inline constexpr uint32_t count_leading_zeros(uint32_t value) noexcept {
-    if (value == 0) {
-        return 32;
-    }
-#if defined(__GNUC__) || defined(__clang__)
-    return static_cast<uint32_t>(__builtin_clz(value));
-#elif defined(_MSC_VER)
-    unsigned long index = 0;
-    _BitScanReverse(&index, value);
-    return 31 - index;
-#else
-    uint32_t count = 0;
-    while ((value & 0x80000000U) == 0) {
-        value <<= 1;
-        ++count;
-    }
-    return count;
-#endif
+    return static_cast<uint32_t>(std::countl_zero(value));
 }
 
 } // namespace myrtos

@@ -136,6 +136,13 @@ void Port::context_switch(
 }
 
 [[noreturn]] void Port::start_first_task(TaskControlBlock* first_tcb) noexcept {
+    // Ensure the calling thread is converted to a fiber so SwitchToFiber succeeds
+    void* current_fiber = ConvertThreadToFiber(nullptr);
+    if (current_fiber == nullptr && GetLastError() == ERROR_ALREADY_FIBER) {
+        current_fiber = GetCurrentFiber();
+    }
+    g_main_fiber = current_fiber;
+
     // Launch simulated hardware SysTick timer thread
     g_timer_running = true;
     g_timer_thread = reinterpret_cast<HANDLE>(_beginthreadex(

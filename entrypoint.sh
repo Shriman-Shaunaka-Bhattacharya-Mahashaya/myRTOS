@@ -7,10 +7,20 @@ echo "=========================================================="
 
 export DISPLAY=:0
 
+# Clean up any stale X11 lock files from prior runs or restarts
+rm -f /tmp/.X0-lock /tmp/.X11-unix/X0
+
 # 1. Start Xvfb (Virtual In-Memory Framebuffer Screen)
 echo "[1/4] Starting Xvfb virtual display on :0 (1280x820)..."
-Xvfb :0 -screen 0 1280x820x24 -ac &
-sleep 1
+Xvfb :0 -screen 0 1280x820x24 -ac +extension GLX +render -noreset &
+
+# Wait for Xvfb socket to appear
+for i in $(seq 1 15); do
+    if [ -e /tmp/.X11-unix/X0 ]; then
+        break
+    fi
+    sleep 0.2
+done
 
 # 2. Start minimal window manager (Openbox)
 echo "[2/4] Starting window manager..."

@@ -161,22 +161,26 @@ void Scheduler::remove_from_ready(TaskControlBlock* task) noexcept {
 }
 
 void Scheduler::start() noexcept {
-    CriticalSectionGuard guard;
-
     if (is_running_) return;
 
-    // Resolve first task to run
-    uint32_t top_prio = count_leading_zeros(ready_bitmap_);
-    if (top_prio >= MAX_PRIORITIES) {
-        top_prio = IDLE_TASK_PRIORITY;
+    TaskControlBlock* first_task = nullptr;
+    {
+        CriticalSectionGuard guard;
+
+        // Resolve first task to run
+        uint32_t top_prio = count_leading_zeros(ready_bitmap_);
+        if (top_prio >= MAX_PRIORITIES) {
+            top_prio = IDLE_TASK_PRIORITY;
+        }
+
+        current_task_ = static_cast<TaskControlBlock*>(ready_queues_[top_prio].head()->owner);
+        current_task_->state = TaskState::Running;
+        current_task_->context_switch_count = 1;
+        is_running_ = true;
+        first_task = current_task_;
     }
 
-    current_task_ = static_cast<TaskControlBlock*>(ready_queues_[top_prio].head()->owner);
-    current_task_->state = TaskState::Running;
-    current_task_->context_switch_count = 1;
-    is_running_ = true;
-
-    Port::start_first_task(current_task_);
+    Port::start_first_task(first_task);
 }
 
 void Scheduler::yield() noexcept {

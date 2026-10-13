@@ -43,7 +43,7 @@ RUN cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DGLFW_BUILD_WAYLAND=OFF 
     && cmake --build build
 
 # Verify kernel by running automated unit test suite inside container
-RUN ./build/myrtos_tests
+RUN ctest --test-dir build --output-on-failure --no-tests=error
 
 # Make startup script executable
 RUN chmod +x /app/entrypoint.sh

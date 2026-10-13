@@ -1,5 +1,5 @@
 #include <iostream>
-#include <cassert>
+#include "test_support.hpp"
 #include <cstring>
 
 #include "kernel/types.hpp"
@@ -23,8 +23,8 @@ using namespace myrtos;
 void test_intrusive_list() {
     std::cout << "[TEST] 1. Intrusive List Operations... ";
     IntrusiveList list;
-    assert(list.empty());
-    assert(list.size() == 0);
+    CHECK(list.empty());
+    CHECK(list.size() == 0);
 
     ListNode n1(nullptr, 30);
     ListNode n2(nullptr, 10);
@@ -34,19 +34,19 @@ void test_intrusive_list() {
     list.insert_sorted_ascending(&n2);
     list.insert_sorted_ascending(&n3);
 
-    assert(list.size() == 3);
-    assert(list.head()->value == 10);
-    assert(list.head()->next->value == 20);
-    assert(list.tail()->value == 30);
+    CHECK(list.size() == 3);
+    CHECK(list.head()->value == 10);
+    CHECK(list.head()->next->value == 20);
+    CHECK(list.tail()->value == 30);
 
     list.remove(&n2);
-    assert(list.size() == 2);
-    assert(list.head()->value == 20);
+    CHECK(list.size() == 2);
+    CHECK(list.head()->value == 20);
 
     ListNode* popped = list.pop_front();
-    assert(popped == &n3);
-    assert(list.size() == 1);
-    assert(list.head() == &n1);
+    CHECK(popped == &n3);
+    CHECK(list.size() == 1);
+    CHECK(list.head() == &n1);
 
     std::cout << "PASSED" << std::endl;
 }
@@ -60,20 +60,20 @@ void test_stack_canary_and_watermark() {
     alignas(16) uint8_t stack_mem[2048];
 
     tcb.prepare_stack(stack_mem, sizeof(stack_mem));
-    assert(tcb.check_stack_integrity() == true);
-    assert(tcb.get_stack_high_watermark() == sizeof(stack_mem));
+    CHECK(tcb.check_stack_integrity() == true);
+    CHECK(tcb.get_stack_high_watermark() == sizeof(stack_mem));
 
     // Simulate stack consumption by modifying bytes
     for (size_t i = 1000; i < sizeof(stack_mem); ++i) {
         stack_mem[i] = 0x55;
     }
-    assert(tcb.check_stack_integrity() == true);
-    assert(tcb.get_stack_high_watermark() == 1000);
+    CHECK(tcb.check_stack_integrity() == true);
+    CHECK(tcb.get_stack_high_watermark() == 1000);
 
     // Corrupt canary intentionally to verify detection
     auto* canary = reinterpret_cast<uint32_t*>(stack_mem);
     *canary = 0xBAD0BAD0;
-    assert(tcb.check_stack_integrity() == false);
+    CHECK(tcb.check_stack_integrity() == false);
 
     std::cout << "PASSED" << std::endl;
 }
@@ -86,16 +86,16 @@ void test_priority_bitmap_clz() {
     // Priority 0 corresponds to bit 31
     // Priority 31 corresponds to bit 0
     uint32_t bitmap = 0;
-    assert(count_leading_zeros(bitmap) == 32);
+    CHECK(count_leading_zeros(bitmap) == 32);
 
     bitmap |= (1U << (31U - 5)); // Priority 5
-    assert(count_leading_zeros(bitmap) == 5);
+    CHECK(count_leading_zeros(bitmap) == 5);
 
     bitmap |= (1U << (31U - 2)); // Priority 2 (Higher)
-    assert(count_leading_zeros(bitmap) == 2);
+    CHECK(count_leading_zeros(bitmap) == 2);
 
     bitmap |= (1U << (31U - 0)); // Priority 0 (Highest)
-    assert(count_leading_zeros(bitmap) == 0);
+    CHECK(count_leading_zeros(bitmap) == 0);
 
     std::cout << "PASSED" << std::endl;
 }
@@ -110,25 +110,25 @@ void test_memory_pool() {
     constexpr size_t BLOCK_COUNT = 1024 / BLOCK_SIZE;
 
     MemoryPool pool(pool_buffer, BLOCK_SIZE, BLOCK_COUNT);
-    assert(pool.free_blocks() == BLOCK_COUNT);
+    CHECK(pool.free_blocks() == BLOCK_COUNT);
 
     void* blocks[BLOCK_COUNT];
     for (size_t i = 0; i < BLOCK_COUNT; ++i) {
         blocks[i] = pool.allocate();
-        assert(blocks[i] != nullptr);
+        CHECK(blocks[i] != nullptr);
     }
-    assert(pool.free_blocks() == 0);
-    assert(pool.allocate() == nullptr); // Exhausted
+    CHECK(pool.free_blocks() == 0);
+    CHECK(pool.allocate() == nullptr); // Exhausted
 
     // Deallocate in reverse order
     for (size_t i = 0; i < BLOCK_COUNT; ++i) {
-        assert(pool.deallocate(blocks[i]) == Status::Ok);
+        CHECK(pool.deallocate(blocks[i]) == Status::Ok);
     }
-    assert(pool.free_blocks() == BLOCK_COUNT);
+    CHECK(pool.free_blocks() == BLOCK_COUNT);
 
     // Invalid pointer checks
     uint8_t invalid_ptr[10];
-    assert(pool.deallocate(invalid_ptr) == Status::InvalidParam);
+    CHECK(pool.deallocate(invalid_ptr) == Status::InvalidParam);
 
     std::cout << "PASSED" << std::endl;
 }
@@ -139,30 +139,30 @@ void test_memory_pool() {
 void test_message_queue() {
     std::cout << "[TEST] 5. Circular Message Queue... ";
     StaticQueue<uint32_t, 4> queue;
-    assert(queue.empty());
-    assert(!queue.full());
+    CHECK(queue.empty());
+    CHECK(!queue.full());
 
     uint32_t val = 10;
-    assert(queue.try_send(val) == Status::Ok);
+    CHECK(queue.try_send(val) == Status::Ok);
     val = 20;
-    assert(queue.try_send(val) == Status::Ok);
+    CHECK(queue.try_send(val) == Status::Ok);
     val = 30;
-    assert(queue.try_send(val) == Status::Ok);
+    CHECK(queue.try_send(val) == Status::Ok);
     val = 40;
-    assert(queue.try_send(val) == Status::Ok);
+    CHECK(queue.try_send(val) == Status::Ok);
 
-    assert(queue.full());
+    CHECK(queue.full());
     val = 50;
-    assert(queue.try_send(val) == Status::QueueFull); // Capacity reached
+    CHECK(queue.try_send(val) == Status::QueueFull); // Capacity reached
 
     uint32_t out_val = 0;
-    assert(queue.try_receive(out_val) == Status::Ok && out_val == 10);
-    assert(queue.try_receive(out_val) == Status::Ok && out_val == 20);
-    assert(queue.try_receive(out_val) == Status::Ok && out_val == 30);
-    assert(queue.try_receive(out_val) == Status::Ok && out_val == 40);
+    CHECK(queue.try_receive(out_val) == Status::Ok && out_val == 10);
+    CHECK(queue.try_receive(out_val) == Status::Ok && out_val == 20);
+    CHECK(queue.try_receive(out_val) == Status::Ok && out_val == 30);
+    CHECK(queue.try_receive(out_val) == Status::Ok && out_val == 40);
 
-    assert(queue.empty());
-    assert(queue.try_receive(out_val) == Status::QueueEmpty);
+    CHECK(queue.empty());
+    CHECK(queue.try_receive(out_val) == Status::QueueEmpty);
 
     std::cout << "PASSED" << std::endl;
 }
@@ -191,17 +191,17 @@ void test_virtual_hardware() {
 
     // Simulate input Low -> High (Rising edge)
     gpio.simulate_input_change(2, hw::PinState::High);
-    assert(vic.has_pending() == true);
+    CHECK(vic.has_pending() == true);
 
     // Dispatch pending IRQ
-    assert(vic.dispatch_next_pending() == true);
-    assert(gpio_isr_invoked == true);
-    assert(vic.has_pending() == false);
+    CHECK(vic.dispatch_next_pending() == true);
+    CHECK(gpio_isr_invoked == true);
+    CHECK(vic.has_pending() == false);
 
     // Configure Pin 3 as Output
     gpio.configure_pin(3, hw::PinDirection::Output);
-    assert(gpio.write_pin(3, hw::PinState::High) == Status::Ok);
-    assert(gpio.read_pin(3) == hw::PinState::High);
+    CHECK(gpio.write_pin(3, hw::PinState::High) == Status::Ok);
+    CHECK(gpio.read_pin(3) == hw::PinState::High);
 
     std::cout << "PASSED" << std::endl;
 }
@@ -213,39 +213,54 @@ void test_virtual_uart() {
     std::cout << "[TEST] 7. Virtual UART Loopback & Buffers... ";
     auto& uart = hw::VirtualUart::instance();
 
-    assert(uart.write_byte('H') == Status::Ok);
-    assert(uart.write_byte('i') == Status::Ok);
+    CHECK(uart.write_byte('H') == Status::Ok);
+    CHECK(uart.write_byte('i') == Status::Ok);
 
     char sink[16]{};
     size_t pulled = uart.pull_transmitted_data(sink, sizeof(sink));
-    assert(pulled == 2);
-    assert(sink[0] == 'H' && sink[1] == 'i');
+    CHECK(pulled == 2);
+    CHECK(sink[0] == 'H' && sink[1] == 'i');
 
     uart.simulate_incoming_data("TEST\n", 5);
-    assert(uart.is_rx_available());
+    CHECK(uart.is_rx_available());
 
     uint8_t rx_byte = 0;
-    assert(uart.read_byte(&rx_byte) == Status::Ok && rx_byte == 'T');
-    assert(uart.read_byte(&rx_byte) == Status::Ok && rx_byte == 'E');
+    CHECK(uart.read_byte(&rx_byte) == Status::Ok && rx_byte == 'T');
+    CHECK(uart.read_byte(&rx_byte) == Status::Ok && rx_byte == 'E');
 
     std::cout << "PASSED" << std::endl;
 }
 
-int main() {
-    std::cout << "========================================" << std::endl;
-    std::cout << "       myRTOS Kernel Verification       " << std::endl;
-    std::cout << "========================================" << std::endl;
-
-    test_intrusive_list();
-    test_stack_canary_and_watermark();
-    test_priority_bitmap_clz();
-    test_memory_pool();
-    test_message_queue();
-    test_virtual_hardware();
-    test_virtual_uart();
-
-    std::cout << "========================================" << std::endl;
-    std::cout << " ALL DETERMINISTIC TESTS PASSED (7/7)   " << std::endl;
-    std::cout << "========================================" << std::endl;
+int main(int argc, char** argv) {
+    struct TestCase { const char* name; void (*run)(); };
+    const TestCase cases[] = {
+        {"intrusive_list", test_intrusive_list},
+        {"stack_watermark", test_stack_canary_and_watermark},
+        {"priority_bitmap", test_priority_bitmap_clz},
+        {"memory_pool", test_memory_pool},
+        {"message_queue", test_message_queue},
+        {"virtual_hardware", test_virtual_hardware},
+        {"virtual_uart", test_virtual_uart},
+    };
+    if (argc == 2 && std::strcmp(argv[1], "--fail-check") == 0) {
+        CHECK(false); // CTest expects this process to fail in every build mode.
+    }
+    if (argc > 2) {
+        std::cerr << "Usage: myrtos_tests [case-name]\n";
+        return 2;
+    }
+    size_t passed = 0;
+    for (const auto& test : cases) {
+        if (argc == 1 || std::strcmp(argv[1], test.name) == 0) {
+            test.run();
+            ++passed;
+        }
+    }
+    if (passed == 0) {
+        std::cerr << "Unknown test case: " << argv[1] << '\n';
+        return 2;
+    }
+    std::cout << passed << " component test(s) passed; "
+              << myrtos::test::check_count << " checks evaluated.\n";
     return 0;
 }

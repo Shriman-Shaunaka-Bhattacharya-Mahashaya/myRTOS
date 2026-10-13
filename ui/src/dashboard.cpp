@@ -24,17 +24,41 @@ SimulationDashboard::~SimulationDashboard() noexcept {
 
 bool SimulationDashboard::init(int width, int height, const char* title) noexcept {
     if (!glfwInit()) {
+        std::fprintf(stderr, "Failed to initialize GLFW.\n");
         return false;
     }
 
-    // GL 3.3 + GLSL 130
+    // Attempt 1: OpenGL 3.3 Core Profile (Modern desktop default)
     glfwWindowHint(GLFW_CONTEXT_VERSION_MAJOR, 3);
     glfwWindowHint(GLFW_CONTEXT_VERSION_MINOR, 3);
     glfwWindowHint(GLFW_OPENGL_PROFILE, GLFW_OPENGL_CORE_PROFILE);
     glfwWindowHint(GLFW_OPENGL_FORWARD_COMPAT, GL_TRUE);
 
     window_ = glfwCreateWindow(width, height, title, nullptr, nullptr);
+    const char* glsl_version = "#version 130";
+
+    // Attempt 2: OpenGL 3.0 (Compatibility profile for Xvfb / software Mesa)
     if (!window_) {
+        glfwDefaultWindowHints();
+        glfwWindowHint(GLFW_CONTEXT_VERSION_MAJOR, 3);
+        glfwWindowHint(GLFW_CONTEXT_VERSION_MINOR, 0);
+        window_ = glfwCreateWindow(width, height, title, nullptr, nullptr);
+    }
+
+    // Attempt 3: OpenGL 2.1 (Universal fallback for containers & virtual machines)
+    if (!window_) {
+        glfwDefaultWindowHints();
+        glfwWindowHint(GLFW_CONTEXT_VERSION_MAJOR, 2);
+        glfwWindowHint(GLFW_CONTEXT_VERSION_MINOR, 1);
+        window_ = glfwCreateWindow(width, height, title, nullptr, nullptr);
+        glsl_version = "#version 120";
+    }
+
+    if (!window_) {
+        const char* desc = nullptr;
+        int err = glfwGetError(&desc);
+        std::fprintf(stderr, "Failed to create GLFW window (GLFW error %d: %s).\n", 
+                     err, desc ? desc : "Unknown error");
         glfwTerminate();
         return false;
     }
@@ -61,7 +85,7 @@ bool SimulationDashboard::init(int width, int height, const char* title) noexcep
 
     // Setup Platform/Renderer backends
     ImGui_ImplGlfw_InitForOpenGL(window_, true);
-    ImGui_ImplOpenGL3_Init("#version 130");
+    ImGui_ImplOpenGL3_Init(glsl_version);
 
     return true;
 }

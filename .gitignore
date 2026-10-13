@@ -27,3 +27,9 @@ Makefile
 
 # Third-party repositories (managed separately or cloned via script)
 third_party/
+
+# markdowns
+/changes.md
+/problems.md
+/production-readiness.md
+/simulation-requirements.md

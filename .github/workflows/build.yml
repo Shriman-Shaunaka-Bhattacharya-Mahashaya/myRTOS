@@ -1,0 +1,23 @@
+name: Build and component tests
+
+on: [push, pull_request, workflow_dispatch]
+
+permissions:
+  contents: read
+
+jobs:
+  headless:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, ubuntu-latest]
+        config: [Debug, Release]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Configure without graphics dependencies
+        run: cmake -S . -B out/ci -DMYRTOS_BUILD_UI=OFF -DMYRTOS_BUILD_EXAMPLES=OFF -DBUILD_TESTING=ON -DCMAKE_BUILD_TYPE=${{ matrix.config }}
+      - name: Build
+        run: cmake --build out/ci --config ${{ matrix.config }} --parallel 2
+      - name: Test (empty test suites are errors)
+        run: ctest --test-dir out/ci -C ${{ matrix.config }} --output-on-failure --no-tests=error
