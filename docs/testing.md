@@ -1,6 +1,6 @@
 # Building and testing the simulator foundation
 
-The tests currently check seven components, not complete running-task behavior. Scheduler blocking, timer correctness, concurrency, and UI interaction still need integration tests and fixes. See [the assessment](../production-readiness.md).
+The tests currently check seven components, not complete running-task behavior. Scheduler blocking, timer correctness, concurrency, and UI interaction still need integration tests and fixes.
 
 ## Build without a graphical environment
 

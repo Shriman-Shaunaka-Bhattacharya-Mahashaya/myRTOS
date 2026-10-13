@@ -211,14 +211,6 @@ The next stages focus on:
 5. Input-driven examples, recorded event traces, and repeatable scenarios.
 6. Native UI validation on Windows/Linux and container/browser validation.
 
-The [simulation requirements](simulation-requirements.md) define the intended behavior. The [engineering assessment](production-readiness.md) provides the detailed implementation priorities and release criteria.
+## Documentation
 
-## Documentation and project history
-
-- [docs/testing.md](docs/testing.md): build commands, test behavior, and validation results.
-- [simulation-requirements.md](simulation-requirements.md): agreed simulator scope and acceptance criteria.
-- [production-readiness.md](production-readiness.md): engineering findings and implementation roadmap.
-- [changes.md](changes.md): the original plan followed by appended change records, including reasons and validation.
-- [problems.md](problems.md): appended problem records with symptoms, causes, diagnosis, status, and solutions or proposed remedies.
-
-Changes and problem resolutions are appended to their logs so the project's history stays intact.
+See [docs/testing.md](docs/testing.md) for build commands, test behavior, and validation results.
