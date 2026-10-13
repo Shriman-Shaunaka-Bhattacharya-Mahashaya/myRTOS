@@ -57,7 +57,7 @@ bool SimulationDashboard::init(int width, int height, const char* title) noexcep
     if (!window_) {
         const char* desc = nullptr;
         int err = glfwGetError(&desc);
-        std::fprintf(stderr, "Failed to create GLFW window (GLFW error %d: %s).\n", 
+        std::fprintf(stderr, "Failed to create GLFW window (GLFW error %d: %s).\n",
                      err, desc ? desc : "Unknown error");
         glfwTerminate();
         return false;
@@ -90,8 +90,11 @@ bool SimulationDashboard::init(int width, int height, const char* title) noexcep
     return true;
 }
 
-void SimulationDashboard::run() noexcept {
-    while (!glfwWindowShouldClose(window_)) {
+void SimulationDashboard::run(size_t frame_limit) noexcept {
+    size_t frames = 0;
+    while (!glfwWindowShouldClose(window_) && (frame_limit == 0 || frames < frame_limit)) {
+        ++frames;
+        task_metric_count_ = Scheduler::instance().get_task_metrics(task_metrics_, MAX_TASKS + 1, &sampled_tick_);
         glfwPollEvents();
 
         // Sample virtual UART stream into terminal history
@@ -107,10 +110,13 @@ void SimulationDashboard::run() noexcept {
         }
 
         // Sample active running task for execution trace timeline
-        TickType current_tick = Scheduler::instance().tick_count();
+        TickType current_tick = sampled_tick_;
         if (current_tick != last_sampled_tick_) {
             last_sampled_tick_ = current_tick;
-            TaskControlBlock* current = Scheduler::instance().current_task();
+            const TaskMetrics* current = nullptr;
+            for (size_t i = 0; i < task_metric_count_; ++i) {
+                if (task_metrics_[i].state == TaskState::Running) current = &task_metrics_[i];
+            }
             if (current != nullptr) {
                 ExecutionTracePoint pt{};
                 pt.tick = current_tick;
@@ -181,8 +187,8 @@ void SimulationDashboard::render_ui() noexcept {
 void SimulationDashboard::render_simulation_controls() noexcept {
     ImGui::TextColored(ImVec4(0.2f, 0.8f, 1.0f, 1.0f), "myRTOS INTERACTIVE TELEMETRY & CONTROL DASHBOARD");
     ImGui::SameLine();
-    ImGui::Text("| System Tick: %u ms | Active Tasks: %zu", 
-                Scheduler::instance().tick_count(), Scheduler::instance().task_count());
+    ImGui::Text("| System Tick: %u ms | Active Tasks: %zu",
+                sampled_tick_, task_metric_count_ > 0 ? task_metric_count_ - 1 : 0);
 
     ImGui::Spacing();
 
@@ -203,11 +209,11 @@ void SimulationDashboard::render_simulation_controls() noexcept {
 void SimulationDashboard::render_task_table() noexcept {
     ImGui::TextColored(ImVec4(0.4f, 1.0f, 0.4f, 1.0f), "Task Control Blocks & Execution State");
 
-    TaskMetrics metrics[MAX_TASKS];
-    size_t count = Scheduler::instance().get_task_metrics(metrics, MAX_TASKS);
+    const auto* metrics = task_metrics_;
+    const size_t count = task_metric_count_;
 
-    static ImGuiTableFlags flags = ImGuiTableFlags_Borders | 
-                                   ImGuiTableFlags_RowBg | 
+    static ImGuiTableFlags flags = ImGuiTableFlags_Borders |
+                                   ImGuiTableFlags_RowBg |
                                    ImGuiTableFlags_SizingStretchProp;
 
     if (ImGui::BeginTable("TaskTable", 7, flags)) {
@@ -261,14 +267,16 @@ void SimulationDashboard::render_task_table() noexcept {
 
             // Stack Free
             ImGui::TableSetColumnIndex(4);
-            ImGui::Text("%zu B", metrics[i].stack_free_bytes);
+            if (metrics[i].stack_metrics_available) ImGui::Text("%zu B", metrics[i].stack_free_bytes);
+            else ImGui::TextDisabled("N/A");
 
             // Stack Usage Progress Bar
             ImGui::TableSetColumnIndex(5);
             char prog_str[32];
             std::snprintf(prog_str, sizeof(prog_str), "%.1f%%", metrics[i].stack_usage_percent);
             float fraction = metrics[i].stack_usage_percent / 100.0f;
-            ImGui::ProgressBar(fraction, ImVec2(-FLT_MIN, 16.0f), prog_str);
+            if (metrics[i].stack_metrics_available) ImGui::ProgressBar(fraction, ImVec2(-FLT_MIN, 16.0f), prog_str);
+            else ImGui::TextDisabled("Not measured");
 
             // Context Switches
             ImGui::TableSetColumnIndex(6);
@@ -326,7 +334,7 @@ void SimulationDashboard::render_virtual_hardware_panel() noexcept {
 
         ImGui::PushID(pin);
         char pin_label[32];
-        std::snprintf(pin_label, sizeof(pin_label), "Pin %u (%s)", pin, 
+        std::snprintf(pin_label, sizeof(pin_label), "Pin %u (%s)", pin,
                       info.direction == hw::PinDirection::Input ? "IN" : "OUT");
 
         bool pin_is_high = (info.state == hw::PinState::High);
@@ -371,7 +379,7 @@ void SimulationDashboard::render_uart_console() noexcept {
 
     // Input Bar
     ImGui::PushItemWidth(-70.0f);
-    bool submit = ImGui::InputText("##UartInput", uart_input_buffer_, sizeof(uart_input_buffer_), 
+    bool submit = ImGui::InputText("##UartInput", uart_input_buffer_, sizeof(uart_input_buffer_),
                                   ImGuiInputTextFlags_EnterReturnsTrue);
     ImGui::PopItemWidth();
 

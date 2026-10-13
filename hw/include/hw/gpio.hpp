@@ -48,7 +48,7 @@ public:
     /// Injected by UI dashboard or simulation stimuli
     void simulate_input_change(uint8_t pin, PinState new_state) noexcept;
 
-    [[nodiscard]] const GpioPinConfig& get_pin_info(uint8_t pin) const noexcept;
+    [[nodiscard]] GpioPinConfig get_pin_info(uint8_t pin) const noexcept;
 
 private:
     VirtualGpio() noexcept;

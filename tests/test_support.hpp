@@ -3,9 +3,10 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstddef>
+#include <atomic>
 
 namespace myrtos::test {
-inline std::size_t check_count = 0;
+inline std::atomic<std::size_t> check_count{0};
 
 inline void check(bool passed, const char* expression, const char* file, int line) {
     ++check_count;

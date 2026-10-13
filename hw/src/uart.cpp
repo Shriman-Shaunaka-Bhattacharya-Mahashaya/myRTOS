@@ -1,3 +1,4 @@
+#include "port/port.hpp"
 #include "hw/uart.hpp"
 #include "hw/vic.hpp"
 
@@ -9,6 +10,7 @@ VirtualUart& VirtualUart::instance() noexcept {
 }
 
 Status VirtualUart::write_byte(uint8_t byte) noexcept {
+    CriticalSectionGuard guard;
     if (tx_count_ >= UART_BUFFER_SIZE) {
         return Status::ResourceExhausted;
     }
@@ -21,6 +23,7 @@ Status VirtualUart::write_byte(uint8_t byte) noexcept {
 }
 
 Status VirtualUart::read_byte(uint8_t* out_byte) noexcept {
+    CriticalSectionGuard guard;
     if (out_byte == nullptr || rx_count_ == 0) {
         return Status::QueueEmpty;
     }
@@ -33,6 +36,7 @@ Status VirtualUart::read_byte(uint8_t* out_byte) noexcept {
 }
 
 void VirtualUart::simulate_incoming_data(const char* data, size_t length) noexcept {
+    CriticalSectionGuard guard;
     if (data == nullptr || length == 0) return;
 
     for (size_t i = 0; i < length && rx_count_ < UART_BUFFER_SIZE; ++i) {
@@ -46,6 +50,7 @@ void VirtualUart::simulate_incoming_data(const char* data, size_t length) noexce
 }
 
 size_t VirtualUart::pull_transmitted_data(char* buffer_out, size_t max_len) noexcept {
+    CriticalSectionGuard guard;
     if (buffer_out == nullptr || max_len == 0 || tx_count_ == 0) {
         return 0;
     }
@@ -60,10 +65,12 @@ size_t VirtualUart::pull_transmitted_data(char* buffer_out, size_t max_len) noex
 }
 
 bool VirtualUart::is_rx_available() const noexcept {
+    CriticalSectionGuard guard;
     return rx_count_ > 0;
 }
 
 bool VirtualUart::is_tx_empty() const noexcept {
+    CriticalSectionGuard guard;
     return tx_count_ == 0;
 }
 

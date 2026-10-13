@@ -18,8 +18,10 @@ out/
 *.swo
 *~
 .DS_Store
+/imgui.ini
 
 # CMake temporary files
+CMakeUserPresets.json
 CMakeCache.txt
 CMakeFiles/
 cmake_install.cmake

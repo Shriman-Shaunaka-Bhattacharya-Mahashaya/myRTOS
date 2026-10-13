@@ -1,5 +1,8 @@
 #include <iostream>
 #include <thread>
+#include <future>
+#include <cstring>
+#include "port/port.hpp"
 
 #include "kernel/types.hpp"
 #include "kernel/scheduler.hpp"
@@ -72,64 +75,51 @@ static void Task_Heartbeat(void* /*arg*/) {
     }
 }
 
-int main() {
-    std::cout << "Initializing myRTOS kernel..." << std::endl;
-    Status init_res = Scheduler::instance().init();
-    if (init_res != Status::Ok) {
-        std::cerr << "Kernel initialization failed: " << static_cast<int>(init_res) << std::endl;
-        return 1;
-    }
-
-    // Configure Virtual GPIO Pin 2 as Input with RisingEdge interrupt
+static Status setup_simulation() {
+    auto& scheduler = Scheduler::instance();
+    auto status = scheduler.init();
+    if (status != Status::Ok) return status;
     hw::VirtualGpio::instance().configure_pin(2, hw::PinDirection::Input, hw::InterruptTrigger::RisingEdge);
+    status = scheduler.create_task("Producer", Task_Producer, nullptr, 2, s_producer_stack, sizeof(s_producer_stack));
+    if (status != Status::Ok) return status;
+    status = scheduler.create_task("Consumer", Task_Consumer, nullptr, 3, s_consumer_stack, sizeof(s_consumer_stack));
+    if (status != Status::Ok) return status;
+    return scheduler.create_task("Heartbeat", Task_Heartbeat, nullptr, 5, s_heartbeat_stack, sizeof(s_heartbeat_stack));
+}
 
-    // Register tasks
-    Scheduler::instance().create_task(
-        "Producer",
-        Task_Producer,
-        nullptr,
-        2,
-        s_producer_stack,
-        sizeof(s_producer_stack)
-    );
-
-    Scheduler::instance().create_task(
-        "Consumer",
-        Task_Consumer,
-        nullptr,
-        3,
-        s_consumer_stack,
-        sizeof(s_consumer_stack)
-    );
-
-    Scheduler::instance().create_task(
-        "Heartbeat",
-        Task_Heartbeat,
-        nullptr,
-        5,
-        s_heartbeat_stack,
-        sizeof(s_heartbeat_stack)
-    );
-
-    // Initialize UI Dashboard
+int main(int argc, char** argv) {
+    const bool smoke_test = argc == 2 && std::strcmp(argv[1], "--smoke-test") == 0;
+    if (argc > 1 && !smoke_test) {
+        std::cerr << "Usage: myrtos_dashboard [--smoke-test]\n";
+        return 2;
+    }
     ui::SimulationDashboard dashboard;
-    if (!dashboard.init(1280, 820, "myRTOS Interactive Simulation Dashboard")) {
-        std::cerr << "Failed to initialize Dear ImGui / GLFW dashboard." << std::endl;
+    if (!dashboard.init()) return 1;
+
+    // Initialize and run contexts on the same host thread on both platforms.
+    std::promise<Status> initialized;
+    auto ready = initialized.get_future();
+    Status run_result = Status::Error;
+    std::thread rtos_thread([&]() {
+        const auto status = setup_simulation();
+        initialized.set_value(status);
+        if (status == Status::Ok) run_result = Scheduler::instance().start();
+    });
+    const auto status = ready.get();
+    if (status != Status::Ok) {
+        rtos_thread.join();
+        std::cerr << "Simulation initialization failed: " << static_cast<int>(status) << '\n';
         return 1;
     }
 
-    // Launch RTOS Scheduler in background host thread
-    std::thread rtos_thread([]() {
-        Scheduler::instance().start();
-    });
-
-    std::cout << "Starting interactive UI rendering loop..." << std::endl;
-    dashboard.run();
-
+    dashboard.run(smoke_test ? 120 : 0);
+    Port::request_stop();
+    rtos_thread.join();
     dashboard.shutdown();
-    if (rtos_thread.joinable()) {
-        rtos_thread.detach();
+    if (run_result != Status::Ok) return 1;
+    if (smoke_test) {
+        if (Scheduler::instance().tick_count() == 0) return 1;
+        std::cout << "Dashboard smoke test: 120 frames, advancing clock, clean shutdown.\n";
     }
-
     return 0;
 }

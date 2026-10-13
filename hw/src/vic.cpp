@@ -1,3 +1,4 @@
+#include "port/port.hpp"
 #include "hw/vic.hpp"
 
 namespace myrtos::hw {
@@ -13,6 +14,7 @@ Status VirtualInterruptController::register_handler(
     void* context,
     uint8_t priority
 ) noexcept {
+    CriticalSectionGuard guard;
     if (irq >= NUM_IRQS || handler == nullptr) {
         return Status::InvalidParam;
     }
@@ -27,30 +29,35 @@ Status VirtualInterruptController::register_handler(
 }
 
 void VirtualInterruptController::enable_irq(uint32_t irq) noexcept {
+    CriticalSectionGuard guard;
     if (irq < NUM_IRQS) {
         lines_[irq].enabled = true;
     }
 }
 
 void VirtualInterruptController::disable_irq(uint32_t irq) noexcept {
+    CriticalSectionGuard guard;
     if (irq < NUM_IRQS) {
         lines_[irq].enabled = false;
     }
 }
 
 void VirtualInterruptController::trigger_irq(uint32_t irq) noexcept {
+    CriticalSectionGuard guard;
     if (irq < NUM_IRQS && lines_[irq].enabled) {
         lines_[irq].pending = true;
     }
 }
 
 void VirtualInterruptController::clear_pending(uint32_t irq) noexcept {
+    CriticalSectionGuard guard;
     if (irq < NUM_IRQS) {
         lines_[irq].pending = false;
     }
 }
 
 bool VirtualInterruptController::has_pending() const noexcept {
+    CriticalSectionGuard guard;
     for (size_t i = 0; i < NUM_IRQS; ++i) {
         if (lines_[i].enabled && lines_[i].pending) {
             return true;
@@ -60,6 +67,7 @@ bool VirtualInterruptController::has_pending() const noexcept {
 }
 
 bool VirtualInterruptController::dispatch_next_pending() noexcept {
+    CriticalSectionGuard guard;
     int32_t best_irq = -1;
     uint8_t highest_priority = 255;
 

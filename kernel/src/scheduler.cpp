@@ -29,6 +29,9 @@ Scheduler::Scheduler() noexcept {
 
 Status Scheduler::init() noexcept {
     CriticalSectionGuard guard;
+    if (is_running_) return Status::Error;
+    current_task_ = nullptr;
+    next_task_ = nullptr;
 
     ready_bitmap_ = 0;
     current_tick_ = 0;
@@ -55,6 +58,7 @@ Status Scheduler::init() noexcept {
     }
 
     // Create Idle Task at LOWEST_PRIORITY (31)
+    new (&idle_tcb_) TaskControlBlock();
     idle_tcb_.id = 0;
     std::strncpy(idle_tcb_.name, "IDLE", TASK_NAME_MAX_LEN - 1);
     idle_tcb_.base_priority = IDLE_TASK_PRIORITY;
@@ -80,7 +84,8 @@ Status Scheduler::create_task(
     size_t stack_size,
     TaskId* out_task_id
 ) noexcept {
-    if (function == nullptr || stack_memory == nullptr || stack_size < MIN_STACK_SIZE_BYTES) {
+    if (function == nullptr || stack_memory == nullptr || stack_size < MIN_STACK_SIZE_BYTES ||
+        reinterpret_cast<uintptr_t>(stack_memory) % 16 != 0) {
         return Status::InvalidParam;
     }
     if (priority >= MAX_PRIORITIES) {
@@ -89,6 +94,7 @@ Status Scheduler::create_task(
 
     CriticalSectionGuard guard;
 
+    if (!Port::on_owner_thread()) return Status::NotInitialized;
     if (task_count_ >= MAX_TASKS) {
         return Status::ResourceExhausted;
     }
@@ -160,13 +166,13 @@ void Scheduler::remove_from_ready(TaskControlBlock* task) noexcept {
     }
 }
 
-void Scheduler::start() noexcept {
-    if (is_running_) return;
+Status Scheduler::start() noexcept {
 
     TaskControlBlock* first_task = nullptr;
     {
         CriticalSectionGuard guard;
 
+        if (is_running_ || !Port::on_owner_thread() || ready_bitmap_ == 0) return Status::InvalidParam;
         // Resolve first task to run
         uint32_t top_prio = count_leading_zeros(ready_bitmap_);
         if (top_prio >= MAX_PRIORITIES) {
@@ -180,7 +186,14 @@ void Scheduler::start() noexcept {
         first_task = current_task_;
     }
 
-    Port::start_first_task(first_task);
+    const auto result = Port::start_first_task(first_task);
+    {
+        CriticalSectionGuard guard;
+        is_running_ = false;
+        current_task_ = nullptr;
+        next_task_ = nullptr;
+    }
+    return result;
 }
 
 void Scheduler::yield() noexcept {
@@ -210,6 +223,7 @@ void Scheduler::schedule() noexcept {
 
     TaskControlBlock* best_task = static_cast<TaskControlBlock*>(ready_queues_[top_prio].head()->owner);
     if (best_task == current_task_) {
+        best_task->state = TaskState::Running;
         return;
     }
 
@@ -240,7 +254,11 @@ void Scheduler::tick_isr() noexcept {
         auto* task = static_cast<TaskControlBlock*>(head->owner);
         if (task->wake_tick <= current_tick_) {
             delayed_list_.remove(head);
-            task->wait_result = Status::Ok;
+            task->wait_result = task->wait_queue ? Status::Timeout : Status::Ok;
+            if (task->wait_queue) {
+                task->wait_queue->remove(&task->event_node);
+                task->wait_queue = nullptr;
+            }
             make_ready(task);
         } else {
             // Since delayed_list_ is sorted ascending by wake_tick, earliest sleeping task is in the future
@@ -275,6 +293,7 @@ Status Scheduler::sleep_ticks(TickType ticks) noexcept {
         return Status::Ok;
     }
 
+    current_task_->wait_result = Status::Ok;
     current_task_->wake_tick = current_tick_ + ticks;
     current_task_->state_node.value = current_task_->wake_tick;
     current_task_->state = TaskState::Blocked;
@@ -305,6 +324,12 @@ Status Scheduler::suspend_task(TaskId id) noexcept {
         return Status::InvalidParam; // Cannot suspend idle task
     }
 
+    if (target->state == TaskState::Suspended || target->state == TaskState::Terminated) return Status::InvalidParam;
+    if (target->wait_queue) {
+        target->wait_queue->remove(&target->event_node);
+        target->wait_queue = nullptr;
+        target->wait_result = Status::Error;
+    }
     if (target->state == TaskState::Ready || target->state == TaskState::Running) {
         remove_from_ready(target);
     } else if (target->state == TaskState::Blocked) {
@@ -373,6 +398,7 @@ void Scheduler::block_current_task(IntrusiveList& wait_queue, TickType timeout_t
 
     // Insert into event wait queue sorted by priority (highest priority = lowest number first)
     current_task_->event_node.value = current_task_->current_priority;
+    current_task_->wait_queue = &wait_queue;
     wait_queue.insert_sorted_ascending(&current_task_->event_node);
 
     // If timeout specified, also link into delayed list
@@ -387,8 +413,11 @@ void Scheduler::block_current_task(IntrusiveList& wait_queue, TickType timeout_t
 
 void Scheduler::unblock_task(TaskControlBlock* task, Status result) noexcept {
     CriticalSectionGuard guard;
-    if (task == nullptr) return;
-
+    if (task == nullptr || task->state != TaskState::Blocked) return;
+    if (task->wait_queue) {
+        task->wait_queue->remove(&task->event_node);
+        task->wait_queue = nullptr;
+    }
     task->wait_result = result;
 
     if (task->state_node.is_linked()) {
@@ -418,8 +447,9 @@ void Scheduler::unlock() noexcept {
     }
 }
 
-size_t Scheduler::get_task_metrics(TaskMetrics* out_buffer, size_t max_count) const noexcept {
+size_t Scheduler::get_task_metrics(TaskMetrics* out_buffer, size_t max_count, TickType* sampled_tick) const noexcept {
     CriticalSectionGuard guard;
+    if (sampled_tick) *sampled_tick = current_tick_;
     if (out_buffer == nullptr || max_count == 0) return 0;
 
     size_t count = 0;
@@ -430,9 +460,10 @@ size_t Scheduler::get_task_metrics(TaskMetrics* out_buffer, size_t max_count) co
         out_buffer[count].state = idle_tcb_.state;
         out_buffer[count].base_priority = idle_tcb_.base_priority;
         out_buffer[count].current_priority = idle_tcb_.current_priority;
+        out_buffer[count].stack_metrics_available = false;
         out_buffer[count].stack_size = idle_tcb_.stack_size;
-        out_buffer[count].stack_free_bytes = idle_tcb_.get_stack_high_watermark();
-        out_buffer[count].stack_usage_percent = idle_tcb_.get_stack_usage_percentage();
+        out_buffer[count].stack_free_bytes = 0;
+        out_buffer[count].stack_usage_percent = 0.0f;
         out_buffer[count].runtime_ticks = idle_tcb_.runtime_ticks;
         out_buffer[count].context_switch_count = idle_tcb_.context_switch_count;
         ++count;
@@ -446,15 +477,36 @@ size_t Scheduler::get_task_metrics(TaskMetrics* out_buffer, size_t max_count) co
             out_buffer[count].state = t->state;
             out_buffer[count].base_priority = t->base_priority;
             out_buffer[count].current_priority = t->current_priority;
+            out_buffer[count].stack_metrics_available = false;
             out_buffer[count].stack_size = t->stack_size;
-            out_buffer[count].stack_free_bytes = t->get_stack_high_watermark();
-            out_buffer[count].stack_usage_percent = t->get_stack_usage_percentage();
+            out_buffer[count].stack_free_bytes = 0;
+            out_buffer[count].stack_usage_percent = 0.0f;
             out_buffer[count].runtime_ticks = t->runtime_ticks;
             out_buffer[count].context_switch_count = t->context_switch_count;
             ++count;
         }
     }
     return count;
+}
+
+bool Scheduler::is_running() const noexcept {
+    CriticalSectionGuard guard;
+    return is_running_;
+}
+TickType Scheduler::tick_count() const noexcept {
+    CriticalSectionGuard guard;
+    return current_tick_;
+}
+size_t Scheduler::task_count() const noexcept {
+    CriticalSectionGuard guard;
+    return task_count_;
+}
+void Scheduler::finish_current_task() noexcept {
+    CriticalSectionGuard guard;
+    if (!current_task_ || current_task_->id == 0) return;
+    remove_from_ready(current_task_);
+    current_task_->state = TaskState::Terminated;
+    schedule();
 }
 
 void Scheduler::idle_task_func(void* /*arg*/) noexcept {

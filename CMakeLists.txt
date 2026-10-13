@@ -57,6 +57,7 @@ endif()
 
 add_library(myrtos_port STATIC
     ${PORT_SOURCES}
+    port/simulator/host_runtime.cpp
 )
 
 target_include_directories(myrtos_port PUBLIC
@@ -65,9 +66,9 @@ target_include_directories(myrtos_port PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}/hw/include
 )
 
-target_link_libraries(myrtos_port PUBLIC myrtos_kernel)
+target_link_libraries(myrtos_port PUBLIC myrtos_kernel Threads::Threads)
 if (WIN32)
-    target_link_libraries(myrtos_port PRIVATE kernel32 winmm)
+    target_link_libraries(myrtos_port PRIVATE kernel32)
 else()
     target_link_libraries(myrtos_port PRIVATE Threads::Threads)
 endif()
@@ -197,6 +198,11 @@ if(BUILD_TESTING)
     add_test(NAME harness.rejects_failed_check COMMAND myrtos_tests --fail-check)
     set_tests_properties(harness.rejects_failed_check PROPERTIES
         WILL_FAIL TRUE TIMEOUT 10 LABELS "harness")
+
+    add_executable(myrtos_scheduler_tests tests/scheduler_integration.cpp)
+    target_link_libraries(myrtos_scheduler_tests PRIVATE myrtos_kernel myrtos_port myrtos_hw Threads::Threads)
+    add_test(NAME integration.scheduler_ui_access COMMAND myrtos_scheduler_tests)
+    set_tests_properties(integration.scheduler_ui_access PROPERTIES TIMEOUT 10 LABELS "integration")
 endif()
 
 # -------------------------------------------------------------
@@ -245,7 +251,7 @@ if(MYRTOS_BUILD_UI)
 
 endif()
 
-foreach(target IN ITEMS myrtos_kernel myrtos_port myrtos_hw myrtos_ui myrtos_tests myrtos_sim myrtos_dashboard)
+foreach(target IN ITEMS myrtos_kernel myrtos_port myrtos_hw myrtos_ui myrtos_tests myrtos_scheduler_tests myrtos_sim myrtos_dashboard)
     if(TARGET ${target})
         myrtos_target_defaults(${target})
     endif()

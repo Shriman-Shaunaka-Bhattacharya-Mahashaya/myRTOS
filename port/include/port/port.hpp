@@ -29,8 +29,12 @@ public:
         TaskControlBlock* to_tcb
     ) noexcept;
 
-    /// Transfers execution from scheduler bootstrap into the first task.
-    [[noreturn]] static void start_first_task(TaskControlBlock* first_tcb) noexcept;
+    /// Runs on the initializing thread; returns after cooperative stop or startup failure.
+    static Status start_first_task(TaskControlBlock* first_tcb) noexcept;
+
+    /// Thread-safe stop request, handled at the next host scheduling point.
+    static void request_stop() noexcept;
+    static bool on_owner_thread() noexcept;
 
     /// Triggers voluntary CPU yield to scheduler dispatcher.
     static void yield() noexcept;

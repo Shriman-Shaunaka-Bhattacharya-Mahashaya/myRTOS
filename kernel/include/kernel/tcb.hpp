@@ -29,6 +29,7 @@ struct TaskControlBlock {
     size_t stack_size{0};           // Total stack size in bytes
 
     TickType wake_tick{0};          // Absolute tick when sleep/timeout expires
+    IntrusiveList* wait_queue{nullptr}; // Event membership for timeout/cancellation cleanup
     Status wait_result{Status::Ok}; // Result status when awakened from block
 
     // Intrusive list nodes for O(1) state transitions

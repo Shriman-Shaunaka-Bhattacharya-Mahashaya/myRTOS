@@ -1,3 +1,4 @@
+#include "port/port.hpp"
 #include "hw/gpio.hpp"
 #include "hw/vic.hpp"
 
@@ -17,6 +18,7 @@ VirtualGpio::VirtualGpio() noexcept {
 }
 
 Status VirtualGpio::configure_pin(uint8_t pin, PinDirection direction, InterruptTrigger trigger) noexcept {
+    CriticalSectionGuard guard;
     if (pin >= NUM_GPIO_PINS) {
         return Status::InvalidParam;
     }
@@ -27,6 +29,7 @@ Status VirtualGpio::configure_pin(uint8_t pin, PinDirection direction, Interrupt
 }
 
 Status VirtualGpio::write_pin(uint8_t pin, PinState state) noexcept {
+    CriticalSectionGuard guard;
     if (pin >= NUM_GPIO_PINS) {
         return Status::InvalidParam;
     }
@@ -40,6 +43,7 @@ Status VirtualGpio::write_pin(uint8_t pin, PinState state) noexcept {
 }
 
 PinState VirtualGpio::read_pin(uint8_t pin) const noexcept {
+    CriticalSectionGuard guard;
     if (pin >= NUM_GPIO_PINS) {
         return PinState::Low;
     }
@@ -47,6 +51,7 @@ PinState VirtualGpio::read_pin(uint8_t pin) const noexcept {
 }
 
 void VirtualGpio::simulate_input_change(uint8_t pin, PinState new_state) noexcept {
+    CriticalSectionGuard guard;
     if (pin >= NUM_GPIO_PINS) return;
 
     PinState old_state = pins_[pin].state;
@@ -75,7 +80,8 @@ void VirtualGpio::simulate_input_change(uint8_t pin, PinState new_state) noexcep
     }
 }
 
-const GpioPinConfig& VirtualGpio::get_pin_info(uint8_t pin) const noexcept {
+GpioPinConfig VirtualGpio::get_pin_info(uint8_t pin) const noexcept {
+    CriticalSectionGuard guard;
     static GpioPinConfig invalid_pin{};
     if (pin >= NUM_GPIO_PINS) {
         return invalid_pin;

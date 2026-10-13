@@ -17,6 +17,7 @@ struct TaskMetrics {
     TaskState state{TaskState::Ready};
     Priority base_priority{IDLE_TASK_PRIORITY};
     Priority current_priority{IDLE_TASK_PRIORITY};
+    bool stack_metrics_available{false};
     size_t stack_size{0};
     size_t stack_free_bytes{0};
     float stack_usage_percent{0.0f};
@@ -49,10 +50,13 @@ public:
     ) noexcept;
 
     /// Starts the preemptive scheduler (transfers execution to the highest priority task).
-    void start() noexcept;
+    Status start() noexcept;
+
+    /// Removes a returned task from scheduling. Called by the host task thunk.
+    void finish_current_task() noexcept;
 
     /// Checks if scheduler has started and is actively dispatching.
-    [[nodiscard]] bool is_running() const noexcept { return is_running_; }
+    [[nodiscard]] bool is_running() const noexcept;
 
     /// Voluntary context switch request from running task.
     void yield() noexcept;
@@ -85,11 +89,11 @@ public:
     void unlock() noexcept;
 
     [[nodiscard]] TaskControlBlock* current_task() const noexcept { return current_task_; }
-    [[nodiscard]] TickType tick_count() const noexcept { return current_tick_; }
-    [[nodiscard]] size_t task_count() const noexcept { return task_count_; }
+    [[nodiscard]] TickType tick_count() const noexcept;
+    [[nodiscard]] size_t task_count() const noexcept;
 
     /// Fills buffer with active task metrics for UI telemetry visualization.
-    size_t get_task_metrics(TaskMetrics* out_buffer, size_t max_count) const noexcept;
+    size_t get_task_metrics(TaskMetrics* out_buffer, size_t max_count, TickType* sampled_tick = nullptr) const noexcept;
 
 private:
     Scheduler() noexcept;
@@ -124,7 +128,7 @@ private:
 
     // Dedicated Idle Task
     TaskControlBlock idle_tcb_{};
-    alignas(16) uint8_t idle_stack_[MIN_STACK_SIZE_BYTES]{};
+    alignas(16) uint8_t idle_stack_[DEFAULT_STACK_SIZE_BYTES]{};
 
     TickType current_tick_{0};
     uint32_t lock_nesting_{0};

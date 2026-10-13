@@ -27,8 +27,8 @@ constexpr TickType NO_WAIT = 0U;
 constexpr TaskId INVALID_TASK_ID = 0xFFFFFFFFU;
 
 /// Minimum and default task stack sizes (in bytes)
-constexpr size_t MIN_STACK_SIZE_BYTES = 1024;
-constexpr size_t DEFAULT_STACK_SIZE_BYTES = 4096;
+constexpr size_t MIN_STACK_SIZE_BYTES = 16 * 1024;
+constexpr size_t DEFAULT_STACK_SIZE_BYTES = 64 * 1024;
 
 /// Stack canary magic pattern for overflow detection
 constexpr uint32_t STACK_CANARY_PATTERN = 0xDEADBEEFU;

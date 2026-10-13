@@ -1,0 +1,42 @@
+{
+  "version": 2,
+  "cmakeMinimumRequired": { "major": 3, "minor": 20, "patch": 0 },
+  "configurePresets": [
+    {
+      "name": "desktop-debug",
+      "displayName": "Desktop simulator (Debug)",
+      "generator": "Ninja",
+      "binaryDir": "${sourceDir}/out/desktop",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Debug",
+        "MYRTOS_BUILD_UI": "ON",
+        "MYRTOS_BUILD_EXAMPLES": "ON",
+        "BUILD_TESTING": "ON"
+      }
+    },
+    {
+      "name": "headless-debug",
+      "inherits": "desktop-debug",
+      "displayName": "Headless tests (Debug)",
+      "binaryDir": "${sourceDir}/out/headless-debug",
+      "cacheVariables": { "MYRTOS_BUILD_UI": "OFF", "MYRTOS_BUILD_EXAMPLES": "OFF" }
+    },
+    {
+      "name": "headless-release",
+      "inherits": "headless-debug",
+      "displayName": "Headless tests (Release)",
+      "binaryDir": "${sourceDir}/out/headless-release",
+      "cacheVariables": { "CMAKE_BUILD_TYPE": "Release" }
+    }
+  ],
+  "buildPresets": [
+    { "name": "desktop-debug", "configurePreset": "desktop-debug" },
+    { "name": "headless-debug", "configurePreset": "headless-debug" },
+    { "name": "headless-release", "configurePreset": "headless-release" }
+  ],
+  "testPresets": [
+    { "name": "desktop-debug", "configurePreset": "desktop-debug", "output": { "outputOnFailure": true }, "execution": { "noTestsAction": "error" } },
+    { "name": "headless-debug", "configurePreset": "headless-debug", "output": { "outputOnFailure": true }, "execution": { "noTestsAction": "error" } },
+    { "name": "headless-release", "configurePreset": "headless-release", "output": { "outputOnFailure": true }, "execution": { "noTestsAction": "error" } }
+  ]
+}
