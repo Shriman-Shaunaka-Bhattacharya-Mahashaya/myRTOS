@@ -6,6 +6,8 @@ namespace myrtos {
 
 Status Semaphore::acquire(TickType timeout_ticks) noexcept {
     CriticalSectionGuard guard;
+    if (max_count_ == 0) return Status::InvalidParam;
+    if (!valid_timeout(timeout_ticks)) return Status::InvalidParam;
 
     if (count_ > 0) {
         --count_;
@@ -16,12 +18,12 @@ Status Semaphore::acquire(TickType timeout_ticks) noexcept {
         return Status::WouldBlock;
     }
 
-    Scheduler::instance().block_current_task(wait_queue_, timeout_ticks);
-    return Scheduler::instance().current_task()->wait_result;
+    return Scheduler::instance().block_current_task(wait_queue_, timeout_ticks);
 }
 
 Status Semaphore::release() noexcept {
     CriticalSectionGuard guard;
+    if (max_count_ == 0) return Status::InvalidParam;
 
     if (!wait_queue_.empty()) {
         ListNode* node = wait_queue_.pop_front();
@@ -40,6 +42,7 @@ Status Semaphore::release() noexcept {
 
 Status Semaphore::release_from_isr(bool* out_higher_prio_task_woken) noexcept {
     CriticalSectionGuard guard;
+    if (max_count_ == 0) return Status::InvalidParam;
 
     if (out_higher_prio_task_woken != nullptr) {
         *out_higher_prio_task_woken = false;

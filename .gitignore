@@ -35,3 +35,6 @@ third_party/
 /problems.md
 /production-readiness.md
 /simulation-requirements.md
+/interview-guide.md
+# Exported simulator traces
+/trace.csv

@@ -10,6 +10,9 @@
 
 #include <cstdio>
 #include <cstring>
+#include <fstream>
+#include <cstdlib>
+#include "port/simulation.hpp"
 
 namespace myrtos::ui {
 
@@ -70,6 +73,7 @@ bool SimulationDashboard::init(int width, int height, const char* title) noexcep
     IMGUI_CHECKVERSION();
     ImGui::CreateContext();
     ImGuiIO& io = ImGui::GetIO();
+    io.IniFilename = nullptr;
     io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard;
 
     // Apply sleek modern dark styling
@@ -90,10 +94,18 @@ bool SimulationDashboard::init(int width, int height, const char* title) noexcep
     return true;
 }
 
-void SimulationDashboard::run(size_t frame_limit) noexcept {
+void SimulationDashboard::run(DemoSession& session, size_t frame_limit) noexcept {
+    session_ = &session;
     size_t frames = 0;
     while (!glfwWindowShouldClose(window_) && (frame_limit == 0 || frames < frame_limit)) {
         ++frames;
+        if (generation_ != session.generation()) {
+            generation_ = session.generation();
+            for(size_t i=0;i<MAX_TASKS+1;++i){ previous_switches_[i]=0; activity_until_[i]=0; }
+            uart_terminal_history_.clear();
+            execution_trace_.clear();
+            uart_input_buffer_[0] = '\0';
+        }
         task_metric_count_ = Scheduler::instance().get_task_metrics(task_metrics_, MAX_TASKS + 1, &sampled_tick_);
         glfwPollEvents();
 
@@ -109,27 +121,7 @@ void SimulationDashboard::run(size_t frame_limit) noexcept {
             }
         }
 
-        // Sample active running task for execution trace timeline
-        TickType current_tick = sampled_tick_;
-        if (current_tick != last_sampled_tick_) {
-            last_sampled_tick_ = current_tick;
-            const TaskMetrics* current = nullptr;
-            for (size_t i = 0; i < task_metric_count_; ++i) {
-                if (task_metrics_[i].state == TaskState::Running) current = &task_metrics_[i];
-            }
-            if (current != nullptr) {
-                ExecutionTracePoint pt{};
-                pt.tick = current_tick;
-                pt.task_id = current->id;
-                std::strncpy(pt.task_name, current->name, TASK_NAME_MAX_LEN - 1);
-                pt.priority = current->current_priority;
-
-                if (execution_trace_.size() >= MAX_TRACE_POINTS) {
-                    execution_trace_.erase(execution_trace_.begin());
-                }
-                execution_trace_.push_back(pt);
-            }
-        }
+        switch_count_ = Scheduler::instance().get_trace(switch_events_, 512, omitted_events_);
 
         // Start ImGui frame
         ImGui_ImplOpenGL3_NewFrame();
@@ -185,142 +177,125 @@ void SimulationDashboard::render_ui() noexcept {
 }
 
 void SimulationDashboard::render_simulation_controls() noexcept {
-    ImGui::TextColored(ImVec4(0.2f, 0.8f, 1.0f, 1.0f), "myRTOS INTERACTIVE TELEMETRY & CONTROL DASHBOARD");
+    const auto state = SimulationControl::state();
+    ImGui::TextColored(ImVec4(0.2f,0.8f,1,1), "myRTOS SIMULATOR");
     ImGui::SameLine();
-    ImGui::Text("| System Tick: %u ms | Active Tasks: %zu",
-                sampled_tick_, task_metric_count_ > 0 ? task_metric_count_ - 1 : 0);
-
-    ImGui::Spacing();
-
-    if (ImGui::Button(is_sim_paused_ ? "Resume Simulation" : "Pause Simulation", ImVec2(140, 26))) {
-        is_sim_paused_ = !is_sim_paused_;
+    ImGui::Text("| Tick %u | %s | Run %u",sampled_tick_,
+        !session_->running()?"Stopped":state.transition_waiting?"Transition held":state.paused?"Paused":state.pause_requested?"Pausing...":"Running",generation_);
+    ImGui::BeginDisabled(!session_->running());
+    ImGui::BeginDisabled(state.transition_mode!=TransitionMode::Off);
+    if(ImGui::Button(state.pause_requested?"Resume":"Pause",ImVec2(90,28))) SimulationControl::pause(!state.pause_requested);
+    ImGui::SameLine();
+    ImGui::BeginDisabled(!state.paused);
+    if(ImGui::Button("Step 1 tick",ImVec2(100,28))) SimulationControl::step();
+    ImGui::EndDisabled();
+    ImGui::SameLine();
+    ImGui::EndDisabled();
+    const double speeds[]={0.0005,0.001,0.005,0.01,0.05,0.1,0.25,0.5,1,2,5,10};
+    const char* labels[]={"0.0005x","0.001x","0.005x","0.01x","0.05x","0.1x","0.25x","0.5x","1x","2x","5x","10x"};
+    char selected[24]; std::snprintf(selected,sizeof selected,"%.2gx",state.speed);
+    ImGui::SetNextItemWidth(120);
+    if(ImGui::BeginCombo("Speed",selected)){
+        for(size_t i=0;i<sizeof(speeds)/sizeof(speeds[0]);++i) if(ImGui::Selectable(labels[i],state.speed==speeds[i])) SimulationControl::speed(speeds[i]);
+        ImGui::EndCombo();
     }
-
     ImGui::SameLine();
-    if (ImGui::Button("Step Single Tick (1 ms)", ImVec2(160, 26))) {
-        hw::VirtualInterruptController::instance().trigger_irq(hw::IRQ_SYSTICK);
+    if(ImGui::Button("Stop",ImVec2(70,28))) session_->stop();
+    ImGui::EndDisabled();
+    ImGui::SameLine();
+    if(ImGui::Button("Reset",ImVec2(70,28))) {
+        const auto result=session_->reset(true,state.transition_mode,state.transition_delay_ms);
+        feedback_=result==Status::Ok?"Reset complete. Use the active clock or teaching controls to continue.":"Reset failed.";
     }
-
     ImGui::SameLine();
-    ImGui::SetNextItemWidth(150);
-    ImGui::SliderInt("Speed", &sim_speed_multiplier_, 1, 10, "%dx");
+    if(ImGui::Button("Export trace")) {
+        const char* path=std::getenv("MYRTOS_TRACE_PATH");
+        std::ofstream file(path ? path : "trace.csv");
+        file<<"sequence,tick,from_task,to_task\n";
+        for(size_t i=0;i<switch_count_;++i){const auto& e=switch_events_[i];file<<e.sequence<<','<<e.tick<<','<<e.from<<','<<e.to<<'\n';}
+        feedback_=file?(path?"Trace ready. Use Download trace above the browser desktop.":"Saved displayed events to trace.csv"):"Could not write trace.csv";
+    }
+    ImGui::BeginDisabled(!session_->running());
+    const char* modes[]={"Off","Manual","Automatic"};
+    int mode=static_cast<int>(state.transition_mode);
+    ImGui::SetNextItemWidth(130);
+    if(ImGui::Combo("Teaching mode",&mode,modes,3))
+        SimulationControl::transitions(static_cast<TransitionMode>(mode),state.transition_delay_ms);
+    ImGui::SameLine();
+    ImGui::BeginDisabled(state.transition_mode!=TransitionMode::Manual || !state.transition_waiting);
+    if(ImGui::Button("Next transition")) SimulationControl::next_transition();
+    ImGui::EndDisabled();
+    if(state.transition_mode==TransitionMode::Automatic){
+        ImGui::SameLine(); float delay=state.transition_delay_ms/1000.0f;
+        ImGui::SetNextItemWidth(150);
+        if(ImGui::SliderFloat("Hold seconds",&delay,0.1f,10.0f,"%.1f"))
+            SimulationControl::transitions(state.transition_mode,static_cast<unsigned>(delay*1000.0f));
+    }
+    ImGui::EndDisabled();
+    if(state.transition_mode!=TransitionMode::Off){
+        ImGui::TextWrapped("Live teaching: holds committed task switches before the selected task executes. Clock Pause/Step are available when teaching is Off. Reset keeps teaching mode.");
+        if(state.transition_waiting) ImGui::Text("Held #%llu at tick %u: task %u -> %u (selected).",
+            static_cast<unsigned long long>(state.transition_sequence),state.transition_tick,state.transition_from,state.transition_to);
+    }
+    ImGui::TextWrapped("Demo: pin 0 = heartbeat; pin 2 input controls pin 1 LED. UART: PING, HELP, STATUS, LED ON/OFF, PERIOD 1..10000.");
+    if(state.running && state.pause_requested) ImGui::TextWrapped("Inputs wait for Resume or Step. Step advances one tick and lets ready tasks finish their work.");
+    if(!feedback_.empty()) ImGui::TextWrapped("%s",feedback_.c_str());
 }
 
 void SimulationDashboard::render_task_table() noexcept {
-    ImGui::TextColored(ImVec4(0.4f, 1.0f, 0.4f, 1.0f), "Task Control Blocks & Execution State");
-
-    const auto* metrics = task_metrics_;
-    const size_t count = task_metric_count_;
-
-    static ImGuiTableFlags flags = ImGuiTableFlags_Borders |
-                                   ImGuiTableFlags_RowBg |
-                                   ImGuiTableFlags_SizingStretchProp;
-
-    if (ImGui::BeginTable("TaskTable", 7, flags)) {
-        ImGui::TableSetupColumn("ID", ImGuiTableColumnFlags_WidthFixed, 35.0f);
-        ImGui::TableSetupColumn("Name", ImGuiTableColumnFlags_WidthFixed, 90.0f);
-        ImGui::TableSetupColumn("State", ImGuiTableColumnFlags_WidthFixed, 75.0f);
-        ImGui::TableSetupColumn("Priority", ImGuiTableColumnFlags_WidthFixed, 65.0f);
-        ImGui::TableSetupColumn("Stack Free", ImGuiTableColumnFlags_WidthFixed, 80.0f);
-        ImGui::TableSetupColumn("Stack Usage", ImGuiTableColumnFlags_WidthStretch);
-        ImGui::TableSetupColumn("Switches", ImGuiTableColumnFlags_WidthFixed, 65.0f);
+    ImGui::TextColored(ImVec4(0.4f,1,0.4f,1),"Tasks");
+    const auto control=SimulationControl::state();
+    const double now=ImGui::GetTime();
+    if(ImGui::BeginTable("TaskTable",7,ImGuiTableFlags_Borders|ImGuiTableFlags_RowBg|ImGuiTableFlags_SizingStretchProp)){
+        for(auto label : {"ID","Name","State now","Priority","Switches","Dispatch tick","Activity"}) ImGui::TableSetupColumn(label);
         ImGui::TableHeadersRow();
-
-        for (size_t i = 0; i < count; ++i) {
+        for(size_t i=0;i<task_metric_count_;++i){
+            const auto& m=task_metrics_[i];
+            const char* states[]={"Ready","Running","Blocked","Suspended","Terminated"};
+            if(previous_switches_[i]!=m.context_switch_count){
+                previous_switches_[i]=m.context_switch_count; activity_until_[i]=now+0.8;
+            }
+            const bool held=control.transition_waiting && m.id==control.transition_to;
+            const bool recent=now<activity_until_[i] && session_->running();
             ImGui::TableNextRow();
-
-            // ID
-            ImGui::TableSetColumnIndex(0);
-            ImGui::Text("%u", metrics[i].id);
-
-            // Name
-            ImGui::TableSetColumnIndex(1);
-            ImGui::TextUnformatted(metrics[i].name);
-
-            // State (Color coded)
-            ImGui::TableSetColumnIndex(2);
-            switch (metrics[i].state) {
-                case TaskState::Running:
-                    ImGui::TextColored(ImVec4(0.2f, 1.0f, 0.2f, 1.0f), "RUNNING");
-                    break;
-                case TaskState::Ready:
-                    ImGui::TextColored(ImVec4(0.4f, 0.8f, 1.0f, 1.0f), "READY");
-                    break;
-                case TaskState::Blocked:
-                    ImGui::TextColored(ImVec4(1.0f, 0.8f, 0.2f, 1.0f), "BLOCKED");
-                    break;
-                case TaskState::Suspended:
-                    ImGui::TextColored(ImVec4(0.8f, 0.4f, 1.0f, 1.0f), "SUSPEND");
-                    break;
-                default:
-                    ImGui::Text("TERM");
-                    break;
-            }
-
-            // Priority (Highlight if PIP elevation active)
-            ImGui::TableSetColumnIndex(3);
-            if (metrics[i].current_priority < metrics[i].base_priority) {
-                ImGui::TextColored(ImVec4(1.0f, 0.84f, 0.0f, 1.0f), "%u (PIP!)", metrics[i].current_priority);
-            } else {
-                ImGui::Text("%u", metrics[i].current_priority);
-            }
-
-            // Stack Free
-            ImGui::TableSetColumnIndex(4);
-            if (metrics[i].stack_metrics_available) ImGui::Text("%zu B", metrics[i].stack_free_bytes);
-            else ImGui::TextDisabled("N/A");
-
-            // Stack Usage Progress Bar
-            ImGui::TableSetColumnIndex(5);
-            char prog_str[32];
-            std::snprintf(prog_str, sizeof(prog_str), "%.1f%%", metrics[i].stack_usage_percent);
-            float fraction = metrics[i].stack_usage_percent / 100.0f;
-            if (metrics[i].stack_metrics_available) ImGui::ProgressBar(fraction, ImVec2(-FLT_MIN, 16.0f), prog_str);
-            else ImGui::TextDisabled("Not measured");
-
-            // Context Switches
-            ImGui::TableSetColumnIndex(6);
-            ImGui::Text("%u", metrics[i].context_switch_count);
+            if((recent || held) && m.id!=0) ImGui::TableSetBgColor(ImGuiTableBgTarget_RowBg0,IM_COL32(35,85,50,150));
+            ImGui::TableNextColumn();ImGui::Text("%u",m.id);
+            ImGui::TableNextColumn();ImGui::TextUnformatted(m.name);
+            ImGui::TableNextColumn();
+            // Idle remains the selected kernel context while the host waits.
+            const char* state=states[static_cast<unsigned>(m.state)];
+            if(m.state==TaskState::Running && control.transition_waiting && m.id==control.transition_to) state="Running (held)";
+            else if(m.id==0 && m.state==TaskState::Running) state=control.paused?"Paused":"Waiting clock";
+            ImGui::TextUnformatted(state);
+            ImGui::TableNextColumn();ImGui::Text("%u",m.current_priority);
+            ImGui::TableNextColumn();ImGui::Text("%u",m.context_switch_count);
+            ImGui::TableNextColumn();
+            if(m.context_switch_count) ImGui::Text("%u",m.last_run_tick); else ImGui::TextUnformatted("--");
+            ImGui::TableNextColumn();
+            if(held) ImGui::TextColored(ImVec4(0.5f,1,0.6f,1),"Selected");
+            else if(recent) ImGui::TextColored(ImVec4(0.5f,1,0.6f,1),"Ran recently"); else ImGui::TextUnformatted("--");
         }
-
         ImGui::EndTable();
     }
+    ImGui::TextWrapped("Blocked = waiting, not stuck. Tasks run briefly between frames. Green rows show dispatches seen within 0.8 seconds; Dispatch tick records scheduler selection; a held task has not resumed yet.");
+    ImGui::TextWrapped("Idle waits for the clock when tasks are blocked. Lower priority number runs first.");
 }
 
 void SimulationDashboard::render_execution_timeline() noexcept {
-    ImGui::TextColored(ImVec4(0.4f, 1.0f, 0.4f, 1.0f), "Live Execution Timeline (Gantt Rolling Window)");
-
-    ImDrawList* draw_list = ImGui::GetWindowDrawList();
-    ImVec2 p0 = ImGui::GetCursorScreenPos();
-    float avail_width = ImGui::GetContentRegionAvail().x;
-    float height = 50.0f;
-
-    // Background track
-    draw_list->AddRectFilled(p0, ImVec2(p0.x + avail_width, p0.y + height), IM_COL32(30, 32, 40, 255), 4.0f);
-    draw_list->AddRect(p0, ImVec2(p0.x + avail_width, p0.y + height), IM_COL32(60, 65, 80, 255), 4.0f);
-
-    if (!execution_trace_.empty()) {
-        float block_width = avail_width / static_cast<float>(MAX_TRACE_POINTS);
-        for (size_t i = 0; i < execution_trace_.size(); ++i) {
-            float x1 = p0.x + (i * block_width);
-            float x2 = x1 + block_width;
-
-            // Generate deterministic color from task ID
-            ImU32 col = IM_COL32(80, 80, 80, 255);
-            switch (execution_trace_[i].task_id) {
-                case 0: col = IM_COL32(50, 55, 65, 255); break; // IDLE
-                case 1: col = IM_COL32(0, 180, 180, 255); break; // Producer
-                case 2: col = IM_COL32(180, 80, 220, 255); break; // Consumer
-                case 3: col = IM_COL32(50, 200, 100, 255); break; // Heartbeat
-                default: col = IM_COL32(220, 120, 50, 255); break;
-            }
-
-            draw_list->AddRectFilled(ImVec2(x1, p0.y + 4.0f), ImVec2(x2, p0.y + height - 4.0f), col);
+    ImGui::TextColored(ImVec4(0.4f,1,0.4f,1),"Scheduler switch events");
+    ImGui::TextWrapped("%zu recorded events shown; %llu older events omitted. Each row is an actual switch.",switch_count_,static_cast<unsigned long long>(omitted_events_));
+    ImGui::BeginChild("SwitchEvents",ImVec2(0,220),true);
+    if(ImGui::BeginTable("Events",3,ImGuiTableFlags_RowBg|ImGuiTableFlags_Borders)){
+        ImGui::TableSetupColumn("Tick");ImGui::TableSetupColumn("From ID");ImGui::TableSetupColumn("To ID");ImGui::TableHeadersRow();
+        ImGuiListClipper clipper;clipper.Begin(static_cast<int>(switch_count_));
+        while(clipper.Step()) for(int row=clipper.DisplayStart;row<clipper.DisplayEnd;++row){
+            const auto& e=switch_events_[switch_count_-1-static_cast<size_t>(row)];
+            ImGui::TableNextRow();ImGui::TableNextColumn();ImGui::Text("%u",e.tick);
+            ImGui::TableNextColumn();ImGui::Text("%u",e.from);ImGui::TableNextColumn();ImGui::Text("%u",e.to);
         }
+        ImGui::EndTable();
     }
-
-    ImGui::Dummy(ImVec2(avail_width, height));
-    ImGui::TextDisabled("Rolling buffer: Right-most is latest running task.");
+    ImGui::EndChild();
 }
 
 void SimulationDashboard::render_virtual_hardware_panel() noexcept {
@@ -328,6 +303,7 @@ void SimulationDashboard::render_virtual_hardware_panel() noexcept {
 
     ImDrawList* draw_list = ImGui::GetWindowDrawList();
 
+    ImGui::BeginDisabled(!session_->running());
     // 8 Virtual GPIO Pins
     for (uint8_t pin = 0; pin < hw::NUM_GPIO_PINS; ++pin) {
         const auto& info = hw::VirtualGpio::instance().get_pin_info(pin);
@@ -364,6 +340,7 @@ void SimulationDashboard::render_virtual_hardware_panel() noexcept {
 
         ImGui::PopID();
     }
+    ImGui::EndDisabled();
 }
 
 void SimulationDashboard::render_uart_console() noexcept {
@@ -377,6 +354,7 @@ void SimulationDashboard::render_uart_console() noexcept {
     }
     ImGui::EndChild();
 
+    ImGui::BeginDisabled(!session_->running());
     // Input Bar
     ImGui::PushItemWidth(-70.0f);
     bool submit = ImGui::InputText("##UartInput", uart_input_buffer_, sizeof(uart_input_buffer_),
@@ -387,11 +365,14 @@ void SimulationDashboard::render_uart_console() noexcept {
     if (ImGui::Button("Send", ImVec2(60, 0)) || submit) {
         if (uart_input_buffer_[0] != '\0') {
             size_t len = std::strlen(uart_input_buffer_);
-            hw::VirtualUart::instance().simulate_incoming_data(uart_input_buffer_, len);
-            hw::VirtualUart::instance().simulate_incoming_data("\n", 1);
-            uart_input_buffer_[0] = '\0';
+            char packet[257];
+            std::memcpy(packet,uart_input_buffer_,len); packet[len]='\n';
+            if(hw::VirtualUart::instance().simulate_incoming_data(packet,len+1)==Status::Ok){
+                uart_input_buffer_[0]='\0'; feedback_="Command queued.";
+            } else feedback_="Input buffer full. Resume or step to process queued commands, then retry.";
         }
     }
+    ImGui::EndDisabled();
 }
 
 void SimulationDashboard::shutdown() noexcept {

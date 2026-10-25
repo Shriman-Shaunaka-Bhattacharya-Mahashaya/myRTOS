@@ -16,7 +16,10 @@ constexpr uint8_t STACK_FILL_BYTE = 0xA5;
  * Represents the complete state and execution context of an RTOS task.
  * Designed for zero dynamic memory allocation and O(1) list transitions.
  */
+class Mutex;
 struct TaskControlBlock {
+    Mutex* waiting_mutex{nullptr};
+    Mutex* held_mutexes{nullptr};
     TaskId id{INVALID_TASK_ID};
     char name[TASK_NAME_MAX_LEN]{};
     TaskState state{TaskState::Ready};
@@ -41,6 +44,7 @@ struct TaskControlBlock {
     // Telemetry & Diagnostic instrumentation
     uint64_t runtime_ticks{0};
     uint32_t context_switch_count{0};
+    TickType last_run_tick{0}; // Tick at the most recent dispatch; count=0 means never run.
 
     constexpr TaskControlBlock() noexcept = default;
 

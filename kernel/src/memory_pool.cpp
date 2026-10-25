@@ -1,5 +1,6 @@
 #include "kernel/memory_pool.hpp"
 #include <cstdint>
+#include <limits>
 
 namespace myrtos {
 
@@ -13,7 +14,12 @@ MemoryPool::MemoryPool(
       block_count_(block_count),
       free_count_(block_count),
       free_head_(nullptr) {
-    if (buffer_ == nullptr || block_count_ == 0) return;
+    if (buffer_ == nullptr || block_count_ == 0 ||
+        reinterpret_cast<uintptr_t>(buffer_) % alignof(FreeNode) != 0 ||
+        block_size % alignof(FreeNode) != 0 || block_size < sizeof(FreeNode) ||
+        block_count_ > std::numeric_limits<size_t>::max() / block_size_) {
+        buffer_ = nullptr; free_count_ = block_count_ = 0; return;
+    }
 
     // Chain all blocks into an embedded free list
     for (size_t i = 0; i < block_count_; ++i) {
@@ -48,7 +54,10 @@ Status MemoryPool::deallocate(void* block_ptr) noexcept {
     }
 
     auto* byte_ptr = static_cast<uint8_t*>(block_ptr);
-    uintptr_t offset = byte_ptr - buffer_;
+    const auto address = reinterpret_cast<uintptr_t>(byte_ptr);
+    const auto base = reinterpret_cast<uintptr_t>(buffer_);
+    if (address < base) return Status::InvalidParam;
+    const auto offset = address - base;
 
     // Validate pointer lies within pool boundary and matches block alignment
     if (offset >= (block_count_ * block_size_) || (offset % block_size_) != 0) {
@@ -58,6 +67,9 @@ Status MemoryPool::deallocate(void* block_ptr) noexcept {
     CriticalSectionGuard guard;
 
     auto* node = static_cast<FreeNode*>(block_ptr);
+    for (auto* free = free_head_; free != nullptr; free = free->next) {
+        if (free == node) return Status::InvalidParam;
+    }
     node->next = free_head_;
     free_head_ = node;
     ++free_count_;

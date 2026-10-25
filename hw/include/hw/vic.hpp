@@ -28,6 +28,7 @@ struct IrqLine {
  */
 class VirtualInterruptController {
 public:
+    void reset() noexcept;
     static VirtualInterruptController& instance() noexcept;
 
     VirtualInterruptController(const VirtualInterruptController&) = delete;

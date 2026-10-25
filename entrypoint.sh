@@ -1,46 +1,38 @@
 #!/bin/bash
-set -e
-
-echo "=========================================================="
-echo " Starting myRTOS Browser-Based Simulation Environment"
-echo "=========================================================="
-
-export DISPLAY=:0
-
-# Clean up any stale X11 lock files from prior runs or restarts
-rm -f /tmp/.X0-lock /tmp/.X11-unix/X0
-
-# 1. Start Xvfb (Virtual In-Memory Framebuffer Screen)
-echo "[1/4] Starting Xvfb virtual display on :0 (1280x820)..."
-Xvfb :0 -screen 0 1280x820x24 -ac +extension GLX +render -noreset &
-
-# Wait for Xvfb socket to appear
-for i in $(seq 1 15); do
-    if [ -e /tmp/.X11-unix/X0 ]; then
-        break
+set -euo pipefail
+export DISPLAY=:99
+children=()
+cleanup() {
+    trap - EXIT INT TERM
+    if ((${#children[@]})); then
+        kill "${children[@]}" 2>/dev/null || true
+        wait "${children[@]}" 2>/dev/null || true
     fi
-    sleep 0.2
+}
+trap cleanup EXIT
+trap 'exit 0' INT TERM
+rm -f /tmp/.X99-lock /tmp/.X11-unix/X99
+Xvfb :99 -screen 0 1280x820x24 -ac +extension GLX +render -noreset &
+children+=("$!")
+for ((attempt=0;attempt<100;attempt++)); do
+    [[ -S /tmp/.X11-unix/X99 ]] && break
+    kill -0 "${children[0]}" 2>/dev/null || { echo 'Virtual display failed'; exit 1; }
+    sleep 0.1
 done
-
-# 2. Start minimal window manager (Openbox)
-echo "[2/4] Starting window manager..."
+[[ -S /tmp/.X11-unix/X99 ]] || { echo 'Virtual display startup timed out'; exit 1; }
 openbox &
-sleep 1
-
-# 3. Start x11vnc server capturing the virtual screen
-echo "[3/4] Starting x11vnc VNC server on port 5900..."
-x11vnc -display :0 -forever -nopw -shared -rfbport 5900 -quiet &
-sleep 1
-
-# 4. Start noVNC WebSockets proxy (streams screen to web browser)
-echo "[4/4] Starting noVNC browser proxy on http://localhost:8080/vnc.html..."
-websockify --web /usr/share/novnc 8080 localhost:5900 &
-sleep 1
-
-echo "=========================================================="
-echo " myRTOS Interactive Dashboard is LIVE!"
-echo " Open your browser to: http://localhost:8080/vnc.html"
-echo "=========================================================="
-
-# Launch the Dear ImGui simulation dashboard
-exec /app/build/myrtos_dashboard
+children+=("$!")
+x11vnc -display :99 -forever -nopw -shared -localhost -rfbport 5900 -quiet &
+children+=("$!")
+# Wait for VNC before offering a browser connection.
+for ((attempt=0;attempt<100;attempt++)); do
+    if (echo > /dev/tcp/127.0.0.1/5900) 2>/dev/null; then break; fi
+    sleep 0.1
+done
+websockify --heartbeat=30 --web /app/web 8080 localhost:5900 &
+children+=("$!")
+/app/build/myrtos_dashboard "$@" &
+children+=("$!")
+echo 'myRTOS: http://localhost:8080/'
+# A failed dependency ends the container instead of leaving a frozen browser page.
+wait -n "${children[@]}"
