@@ -1,5 +1,6 @@
 #include "kernel/scheduler.hpp"
 #include "kernel/timer.hpp"
+#include "kernel/mutex.hpp"
 #include "port/port.hpp"
 #include <cstring>
 #include <new>
@@ -33,6 +34,8 @@ Status Scheduler::init() noexcept {
     current_task_ = nullptr;
     next_task_ = nullptr;
 
+    TimerManager::instance().reset();
+    trace_sequence_ = 0;
     ready_bitmap_ = 0;
     current_tick_ = 0;
     lock_nesting_ = 0;
@@ -88,7 +91,7 @@ Status Scheduler::create_task(
         reinterpret_cast<uintptr_t>(stack_memory) % 16 != 0) {
         return Status::InvalidParam;
     }
-    if (priority >= MAX_PRIORITIES) {
+    if (priority >= IDLE_TASK_PRIORITY) {
         return Status::InvalidParam;
     }
 
@@ -182,8 +185,10 @@ Status Scheduler::start() noexcept {
         current_task_ = static_cast<TaskControlBlock*>(ready_queues_[top_prio].head()->owner);
         current_task_->state = TaskState::Running;
         current_task_->context_switch_count = 1;
+        current_task_->last_run_tick = current_tick_;
         is_running_ = true;
         first_task = current_task_;
+        record_switch(0, first_task->id);
     }
 
     const auto result = Port::start_first_task(first_task);
@@ -198,7 +203,7 @@ Status Scheduler::start() noexcept {
 
 void Scheduler::yield() noexcept {
     CriticalSectionGuard guard;
-    if (!is_running_) return;
+    if (!is_running_ || !Port::on_owner_thread()) return;
 
     if (current_task_->state == TaskState::Running) {
         // Move to the back of equal priority ready queue for round-robin
@@ -211,6 +216,7 @@ void Scheduler::yield() noexcept {
 
 void Scheduler::schedule() noexcept {
     if (!is_running_) return;
+    if (!Port::on_owner_thread()) { reschedule_pending_ = true; return; }
     if (lock_nesting_ > 0) {
         reschedule_pending_ = true;
         return;
@@ -236,35 +242,35 @@ void Scheduler::schedule() noexcept {
     current_task_ = next_task_;
     current_task_->state = TaskState::Running;
     current_task_->context_switch_count++;
+    current_task_->last_run_tick = current_tick_;
 
+    record_switch(prev_task ? prev_task->id : 0, current_task_->id);
     Port::context_switch(prev_task, current_task_);
 }
 
 void Scheduler::tick_isr() noexcept {
     CriticalSectionGuard guard;
+    if (is_running_ && !Port::on_owner_thread()) return;
     ++current_tick_;
 
     if (current_task_ != nullptr) {
         ++current_task_->runtime_ticks;
     }
 
-    // 1. Wake sleeping tasks from delayed list
-    while (!delayed_list_.empty()) {
-        ListNode* head = delayed_list_.head();
-        auto* task = static_cast<TaskControlBlock*>(head->owner);
-        if (task->wake_tick <= current_tick_) {
-            delayed_list_.remove(head);
+    lock(); // Commit tick, timer and wakeup changes before switching tasks.
+    const auto delayed_count = delayed_list_.size();
+    for (size_t i = 0; i < delayed_count; ++i) {
+        auto* node = delayed_list_.pop_front();
+        auto* task = static_cast<TaskControlBlock*>(node->owner);
+        if (tick_reached(current_tick_, task->wake_tick)) {
             task->wait_result = task->wait_queue ? Status::Timeout : Status::Ok;
-            if (task->wait_queue) {
-                task->wait_queue->remove(&task->event_node);
-                task->wait_queue = nullptr;
-            }
+            if (task->wait_queue) task->wait_queue->remove(&task->event_node);
+            task->wait_queue = nullptr;
+            task->waiting_mutex = nullptr;
             make_ready(task);
-        } else {
-            // Since delayed_list_ is sorted ascending by wake_tick, earliest sleeping task is in the future
-            break;
-        }
+        } else delayed_list_.push_back(node);
     }
+    Mutex::recompute_priorities();
 
     // 2. Process Software Timers
     TimerManager::instance().process_timers(current_tick_);
@@ -278,13 +284,14 @@ void Scheduler::tick_isr() noexcept {
         }
     }
 
-    // 4. Trigger Preemptive Reschedule
-    schedule();
+    // Apply all mutations before dispatch.
+    reschedule_pending_ = true;
+    unlock();
 }
 
 Status Scheduler::sleep_ticks(TickType ticks) noexcept {
     CriticalSectionGuard guard;
-    if (!is_running_ || current_task_ == nullptr || current_task_->id == 0) {
+    if (!can_block() || ticks > MAX_FINITE_WAIT) {
         return Status::InvalidParam; // Idle task cannot sleep
     }
 
@@ -299,13 +306,14 @@ Status Scheduler::sleep_ticks(TickType ticks) noexcept {
     current_task_->state = TaskState::Blocked;
 
     remove_from_ready(current_task_);
-    delayed_list_.insert_sorted_ascending(&current_task_->state_node);
+    delayed_list_.push_back(&current_task_->state_node);
 
     schedule();
     return current_task_->wait_result;
 }
 
 Status Scheduler::suspend_task(TaskId id) noexcept {
+    if (!Port::on_owner_thread()) return Status::InvalidParam;
     CriticalSectionGuard guard;
 
     TaskControlBlock* target = nullptr;
@@ -336,8 +344,10 @@ Status Scheduler::suspend_task(TaskId id) noexcept {
         delayed_list_.remove(&target->state_node);
     }
 
+    target->waiting_mutex = nullptr;
     target->state = TaskState::Suspended;
     suspended_list_.push_back(&target->state_node);
+    Mutex::recompute_priorities();
 
     if (target == current_task_) {
         schedule();
@@ -346,6 +356,7 @@ Status Scheduler::suspend_task(TaskId id) noexcept {
 }
 
 Status Scheduler::resume_task(TaskId id) noexcept {
+    if (!Port::on_owner_thread()) return Status::InvalidParam;
     CriticalSectionGuard guard;
 
     TaskControlBlock* target = nullptr;
@@ -381,6 +392,11 @@ void Scheduler::change_task_priority(TaskControlBlock* task, Priority new_priori
         make_ready(task);
     } else {
         task->current_priority = new_priority;
+        if (task->wait_queue) {
+            task->wait_queue->remove(&task->event_node);
+            task->event_node.value = new_priority;
+            task->wait_queue->insert_sorted_ascending(&task->event_node);
+        }
     }
 
     if (is_running_) {
@@ -388,9 +404,9 @@ void Scheduler::change_task_priority(TaskControlBlock* task, Priority new_priori
     }
 }
 
-void Scheduler::block_current_task(IntrusiveList& wait_queue, TickType timeout_ticks) noexcept {
+Status Scheduler::block_current_task(IntrusiveList& wait_queue, TickType timeout_ticks) noexcept {
     CriticalSectionGuard guard;
-    if (!is_running_ || current_task_ == nullptr) return;
+    if (!can_block() || !valid_timeout(timeout_ticks) || timeout_ticks == 0) return Status::InvalidParam;
 
     remove_from_ready(current_task_);
     current_task_->state = TaskState::Blocked;
@@ -405,10 +421,12 @@ void Scheduler::block_current_task(IntrusiveList& wait_queue, TickType timeout_t
     if (timeout_ticks != WAIT_FOREVER && timeout_ticks > 0) {
         current_task_->wake_tick = current_tick_ + timeout_ticks;
         current_task_->state_node.value = current_task_->wake_tick;
-        delayed_list_.insert_sorted_ascending(&current_task_->state_node);
+        delayed_list_.push_back(&current_task_->state_node);
     }
 
+    Mutex::recompute_priorities();
     schedule();
+    return current_task_->wait_result;
 }
 
 void Scheduler::unblock_task(TaskControlBlock* task, Status result) noexcept {
@@ -418,6 +436,7 @@ void Scheduler::unblock_task(TaskControlBlock* task, Status result) noexcept {
         task->wait_queue->remove(&task->event_node);
         task->wait_queue = nullptr;
     }
+    task->waiting_mutex = nullptr;
     task->wait_result = result;
 
     if (task->state_node.is_linked()) {
@@ -466,6 +485,7 @@ size_t Scheduler::get_task_metrics(TaskMetrics* out_buffer, size_t max_count, Ti
         out_buffer[count].stack_usage_percent = 0.0f;
         out_buffer[count].runtime_ticks = idle_tcb_.runtime_ticks;
         out_buffer[count].context_switch_count = idle_tcb_.context_switch_count;
+        out_buffer[count].last_run_tick = idle_tcb_.last_run_tick;
         ++count;
     }
 
@@ -483,6 +503,7 @@ size_t Scheduler::get_task_metrics(TaskMetrics* out_buffer, size_t max_count, Ti
             out_buffer[count].stack_usage_percent = 0.0f;
             out_buffer[count].runtime_ticks = t->runtime_ticks;
             out_buffer[count].context_switch_count = t->context_switch_count;
+            out_buffer[count].last_run_tick = t->last_run_tick;
             ++count;
         }
     }
@@ -504,9 +525,51 @@ size_t Scheduler::task_count() const noexcept {
 void Scheduler::finish_current_task() noexcept {
     CriticalSectionGuard guard;
     if (!current_task_ || current_task_->id == 0) return;
+    lock();
+    Mutex::release_all(current_task_);
     remove_from_ready(current_task_);
     current_task_->state = TaskState::Terminated;
+    reschedule_pending_ = true;
+    unlock();
     schedule();
+}
+
+void Scheduler::cleanup_tasks() noexcept {
+    CriticalSectionGuard guard;
+    TimerManager::instance().reset();
+    for (size_t i=0;i<task_count_;++i) {
+        auto* task=task_registry_[i];
+        if(task->event_node.list) task->event_node.list->remove(&task->event_node);
+        if(task->state_node.list) task->state_node.list->remove(&task->state_node);
+        task->wait_queue=nullptr; task->waiting_mutex=nullptr;
+        Mutex::abandon_all(task);
+        task->state=TaskState::Terminated;
+    }
+    for(auto& queue:ready_queues_) queue.reset();
+    delayed_list_.reset(); suspended_list_.reset(); ready_bitmap_=0;
+    idle_tcb_.state=TaskState::Terminated;
+}
+bool Scheduler::can_block() const noexcept {
+    return Port::on_owner_thread() && is_running_ && current_task_ && current_task_->id != 0 && lock_nesting_ == 0;
+}
+Status Scheduler::set_initial_tick(TickType tick) noexcept {
+    CriticalSectionGuard guard;
+    if (is_running_) return Status::Error;
+    current_tick_ = tick; return Status::Ok;
+}
+void Scheduler::record_switch(TaskId from, TaskId to) noexcept {
+    auto& event = trace_[trace_sequence_ % TRACE_CAPACITY];
+    event = {trace_sequence_ + 1, current_tick_, from, to};
+    ++trace_sequence_;
+}
+size_t Scheduler::get_trace(SwitchEvent* output, size_t capacity, uint64_t& dropped) const noexcept {
+    CriticalSectionGuard guard;
+    const auto available = static_cast<size_t>(trace_sequence_ < TRACE_CAPACITY ? trace_sequence_ : TRACE_CAPACITY);
+    const auto count = available < capacity ? available : capacity;
+    dropped = trace_sequence_ - count;
+    if (!output) return 0;
+    for (size_t i = 0; i < count; ++i) output[i] = trace_[(trace_sequence_ - count + i) % TRACE_CAPACITY];
+    return count;
 }
 
 void Scheduler::idle_task_func(void* /*arg*/) noexcept {

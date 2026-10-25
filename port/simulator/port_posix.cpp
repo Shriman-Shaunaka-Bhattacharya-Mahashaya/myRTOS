@@ -56,7 +56,9 @@ Status Port::create_context(TaskControlBlock* task, TaskFunction entry, void* ar
 }
 
 void Port::context_switch(TaskControlBlock* from, TaskControlBlock* target) noexcept {
+    const auto tick = Scheduler::instance().tick_count();
     const auto depth = host::suspend_critical();
+    host::transition(from ? from->id : 0, target->id, tick);
     if (host::stop_requested()) {
         setcontext(&main_context);
         std::abort();
@@ -69,9 +71,11 @@ void Port::context_switch(TaskControlBlock* from, TaskControlBlock* target) noex
 Status Port::start_first_task(TaskControlBlock* first) noexcept {
     if (!host::on_owner_thread() || !first || !first->port_context) return Status::InvalidParam;
     host::begin();
-    const int result = swapcontext(&main_context, static_cast<ucontext_t*>(first->port_context));
+    host::transition(0, first->id, Scheduler::instance().tick_count());
+    const int result = host::stop_requested() ? 0 : swapcontext(&main_context, static_cast<ucontext_t*>(first->port_context));
     {
         CriticalSectionGuard guard;
+        Scheduler::instance().cleanup_tasks();
         for (size_t i = 0; i < context_count; ++i) contexts[i].task->port_context = nullptr;
         context_count = 0;
     }

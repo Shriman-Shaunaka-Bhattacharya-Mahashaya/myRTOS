@@ -24,6 +24,13 @@ constexpr Priority IDLE_TASK_PRIORITY = LOWEST_PRIORITY;
 /// Timeout and Sentinel constants
 constexpr TickType WAIT_FOREVER = 0xFFFFFFFFU;
 constexpr TickType NO_WAIT = 0U;
+constexpr TickType MAX_FINITE_WAIT = 0x7FFFFFFFU;
+inline constexpr bool tick_reached(TickType now, TickType deadline) noexcept {
+    return TickType(now - deadline) <= MAX_FINITE_WAIT;
+}
+inline constexpr bool valid_timeout(TickType ticks) noexcept {
+    return ticks == WAIT_FOREVER || ticks <= MAX_FINITE_WAIT;
+}
 constexpr TaskId INVALID_TASK_ID = 0xFFFFFFFFU;
 
 /// Minimum and default task stack sizes (in bytes)

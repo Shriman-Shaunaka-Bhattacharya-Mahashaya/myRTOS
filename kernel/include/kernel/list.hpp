@@ -5,7 +5,9 @@
 
 namespace myrtos {
 
+class IntrusiveList;
 struct ListNode {
+    IntrusiveList* list{nullptr};
     ListNode* next{nullptr};
     ListNode* prev{nullptr};
     uint32_t value{0};   // Used for sorted insertion (e.g., wake tick or priority)
@@ -34,31 +36,11 @@ public:
     IntrusiveList(const IntrusiveList&) = delete;
     IntrusiveList& operator=(const IntrusiveList&) = delete;
 
-    // Movable
-    IntrusiveList(IntrusiveList&& other) noexcept {
-        reset();
-        if (!other.empty()) {
-            root_.next = other.root_.next;
-            root_.prev = other.root_.prev;
-            root_.next->prev = &root_;
-            root_.prev->next = &root_;
-            count_ = other.count_;
-            other.reset();
-        }
+    IntrusiveList(IntrusiveList&& other) noexcept : IntrusiveList() {
+        while (auto* node = other.pop_front()) push_back(node);
     }
-
     IntrusiveList& operator=(IntrusiveList&& other) noexcept {
-        if (this != &other) {
-            reset();
-            if (!other.empty()) {
-                root_.next = other.root_.next;
-                root_.prev = other.root_.prev;
-                root_.next->prev = &root_;
-                root_.prev->next = &root_;
-                count_ = other.count_;
-                other.reset();
-            }
-        }
+        if (this != &other) { reset(); while (auto* node = other.pop_front()) push_back(node); }
         return *this;
     }
 
@@ -96,11 +78,12 @@ public:
     }
 
     void remove(ListNode* node) noexcept {
-        if (node == nullptr || !node->is_linked()) return;
+        if (node == nullptr || node->list != this) return;
         node->prev->next = node->next;
         node->next->prev = node->prev;
         node->next = nullptr;
         node->prev = nullptr;
+        node->list = nullptr;
         if (count_ > 0) {
             --count_;
         }
@@ -132,6 +115,7 @@ public:
     }
 
     void reset() noexcept {
+        while (!empty()) pop_front();
         root_.next = &root_;
         root_.prev = &root_;
         count_ = 0;
@@ -139,6 +123,8 @@ public:
 
 private:
     void insert_before(ListNode* pos, ListNode* node) noexcept {
+        if (node->is_linked()) return;
+        node->list = this;
         node->next = pos;
         node->prev = pos->prev;
         pos->prev->next = node;
@@ -147,6 +133,8 @@ private:
     }
 
     void insert_after(ListNode* pos, ListNode* node) noexcept {
+        if (node->is_linked()) return;
+        node->list = this;
         node->prev = pos;
         node->next = pos->next;
         pos->next->prev = node;

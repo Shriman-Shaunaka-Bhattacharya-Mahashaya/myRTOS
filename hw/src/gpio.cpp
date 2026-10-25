@@ -4,6 +4,8 @@
 
 namespace myrtos::hw {
 
+void VirtualGpio::reset() noexcept { CriticalSectionGuard guard; for (auto& pin : pins_) pin = {}; }
+
 VirtualGpio& VirtualGpio::instance() noexcept {
     static VirtualGpio s_instance;
     return s_instance;
@@ -52,7 +54,7 @@ PinState VirtualGpio::read_pin(uint8_t pin) const noexcept {
 
 void VirtualGpio::simulate_input_change(uint8_t pin, PinState new_state) noexcept {
     CriticalSectionGuard guard;
-    if (pin >= NUM_GPIO_PINS) return;
+    if (pin >= NUM_GPIO_PINS || pins_[pin].direction != PinDirection::Input) return;
 
     PinState old_state = pins_[pin].state;
     pins_[pin].state = new_state;

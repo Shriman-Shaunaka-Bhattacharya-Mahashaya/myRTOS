@@ -1,4 +1,5 @@
 #pragma once
+#include "port/port.hpp"
 
 #include "kernel/types.hpp"
 #include "kernel/list.hpp"
@@ -27,12 +28,19 @@ public:
     /// Releases the mutex and restores owner's base priority.
     Status unlock() noexcept;
 
-    [[nodiscard]] TaskControlBlock* owner() const noexcept { return owner_; }
-    [[nodiscard]] uint32_t lock_count() const noexcept { return lock_count_; }
-    [[nodiscard]] bool is_locked() const noexcept { return owner_ != nullptr; }
-    [[nodiscard]] size_t waiting_count() const noexcept { return wait_queue_.size(); }
+    [[nodiscard]] TaskControlBlock* owner() const noexcept { CriticalSectionGuard guard; return owner_; }
+    [[nodiscard]] uint32_t lock_count() const noexcept { CriticalSectionGuard guard; return lock_count_; }
+    [[nodiscard]] bool is_locked() const noexcept { CriticalSectionGuard guard; return owner_ != nullptr; }
+    [[nodiscard]] size_t waiting_count() const noexcept { CriticalSectionGuard guard; return wait_queue_.size(); }
 
+public:
+    static void recompute_priorities() noexcept;
+    static void release_all(TaskControlBlock* task) noexcept;
+    static void abandon_all(TaskControlBlock* task) noexcept;
 private:
+    void attach(TaskControlBlock* task) noexcept;
+    void detach() noexcept;
+    Mutex* next_held_{nullptr};
     TaskControlBlock* owner_{nullptr};
     Priority original_owner_priority_{IDLE_TASK_PRIORITY};
     uint32_t lock_count_{0};
@@ -53,8 +61,8 @@ public:
         }
     }
 
-    [[nodiscard]] Status status() const noexcept { return status_; }
-    [[nodiscard]] bool is_locked() const noexcept { return status_ == Status::Ok; }
+    [[nodiscard]] Status status() const noexcept { CriticalSectionGuard guard; return status_; }
+    [[nodiscard]] bool is_locked() const noexcept { CriticalSectionGuard guard; return status_ == Status::Ok; }
 
     MutexLockGuard(const MutexLockGuard&) = delete;
     MutexLockGuard& operator=(const MutexLockGuard&) = delete;

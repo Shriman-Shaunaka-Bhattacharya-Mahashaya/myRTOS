@@ -11,6 +11,7 @@ constexpr size_t UART_BUFFER_SIZE = 512;
  */
 class VirtualUart {
 public:
+    void reset() noexcept;
     static VirtualUart& instance() noexcept;
 
     VirtualUart(const VirtualUart&) = delete;
@@ -23,7 +24,7 @@ public:
     Status read_byte(uint8_t* out_byte) noexcept;
 
     /// UI / Harness injects received bytes into UART RX FIFO
-    void simulate_incoming_data(const char* data, size_t length) noexcept;
+    Status simulate_incoming_data(const char* data, size_t length) noexcept;
 
     /// UI pulls accumulated output bytes to display in the UI console
     size_t pull_transmitted_data(char* buffer_out, size_t max_len) noexcept;

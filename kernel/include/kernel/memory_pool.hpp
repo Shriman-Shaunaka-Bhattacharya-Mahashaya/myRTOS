@@ -8,7 +8,7 @@ namespace myrtos {
 /**
  * @brief O(1) Fixed-Size Block Memory Pool Allocator.
  * 
- * Guarantees zero heap fragmentation and constant-time allocation and deallocation.
+ * Fixed storage; allocation is constant time and validated release scans free blocks.
  */
 class MemoryPool {
 public:
@@ -24,13 +24,13 @@ public:
     /// Allocates one fixed-size block in O(1) time. Returns nullptr if exhausted.
     void* allocate() noexcept;
 
-    /// Returns a block to the pool in O(1) time.
+    /// Validates and returns a block; O(number of free blocks).
     Status deallocate(void* block_ptr) noexcept;
 
-    [[nodiscard]] size_t block_size() const noexcept { return block_size_; }
-    [[nodiscard]] size_t total_blocks() const noexcept { return block_count_; }
-    [[nodiscard]] size_t free_blocks() const noexcept { return free_count_; }
-    [[nodiscard]] size_t allocated_blocks() const noexcept { return block_count_ - free_count_; }
+    [[nodiscard]] size_t block_size() const noexcept { CriticalSectionGuard guard; return block_size_; }
+    [[nodiscard]] size_t total_blocks() const noexcept { CriticalSectionGuard guard; return block_count_; }
+    [[nodiscard]] size_t free_blocks() const noexcept { CriticalSectionGuard guard; return free_count_; }
+    [[nodiscard]] size_t allocated_blocks() const noexcept { CriticalSectionGuard guard; return block_count_ - free_count_; }
 
 private:
     struct FreeNode {
@@ -49,9 +49,10 @@ private:
  */
 template <typename T, size_t BlockCount>
 class StaticMemoryPool {
+    static_assert(BlockCount > 0);
 public:
     StaticMemoryPool() noexcept
-        : pool_(reinterpret_cast<uint8_t*>(storage_), sizeof(T) < sizeof(void*) ? sizeof(void*) : sizeof(T), BlockCount) {}
+        : pool_(reinterpret_cast<uint8_t*>(storage_), stride, BlockCount) {}
 
     T* allocate() noexcept {
         return reinterpret_cast<T*>(pool_.allocate());
@@ -61,12 +62,14 @@ public:
         return pool_.deallocate(ptr);
     }
 
-    [[nodiscard]] size_t free_count() const noexcept { return pool_.free_blocks(); }
-    [[nodiscard]] size_t total_count() const noexcept { return BlockCount; }
+    [[nodiscard]] size_t free_count() const noexcept { CriticalSectionGuard guard; return pool_.free_blocks(); }
+    [[nodiscard]] size_t total_count() const noexcept { CriticalSectionGuard guard; return BlockCount; }
 
 private:
+    static constexpr size_t alignment = alignof(T) > alignof(void*) ? alignof(T) : alignof(void*);
+    static constexpr size_t stride = ((sizeof(T) + alignment - 1) / alignment) * alignment;
     alignas(alignof(T) > alignof(void*) ? alignof(T) : alignof(void*))
-    uint8_t storage_[(sizeof(T) < sizeof(void*) ? sizeof(void*) : sizeof(T)) * BlockCount];
+    uint8_t storage_[stride * BlockCount];
     MemoryPool pool_;
 };
 

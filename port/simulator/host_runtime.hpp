@@ -15,4 +15,5 @@ void request_stop() noexcept;
 bool stop_requested() noexcept;
 bool on_owner_thread() noexcept;
 void poll() noexcept;
+void transition(uint32_t from, uint32_t to, uint32_t tick) noexcept;
 } // namespace myrtos::host

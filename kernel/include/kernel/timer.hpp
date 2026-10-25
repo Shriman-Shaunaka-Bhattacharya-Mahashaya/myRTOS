@@ -25,6 +25,7 @@ public:
         void* argument = nullptr
     ) noexcept;
 
+    ~SoftwareTimer() noexcept { stop(); }
     SoftwareTimer(const SoftwareTimer&) = delete;
     SoftwareTimer& operator=(const SoftwareTimer&) = delete;
 
@@ -47,6 +48,7 @@ public:
     void trigger_callback() noexcept;
 
 private:
+    friend class TimerManager;
     char name_[16]{};
     TickType period_ticks_{0};
     TickType expiry_tick_{0};
@@ -70,6 +72,7 @@ public:
 
     /// Called by the scheduler on each SysTick.
     void process_timers(TickType current_tick) noexcept;
+    void reset() noexcept;
 
     /// Registers/activates an active timer.
     void register_timer(SoftwareTimer* timer) noexcept;

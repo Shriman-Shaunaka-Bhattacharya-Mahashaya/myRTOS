@@ -1,0 +1,26 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>myRTOS Simulator</title>
+<style>
+*{box-sizing:border-box}body{margin:0;background:#10151d;color:#e7eef8;font:14px system-ui,sans-serif;height:100dvh;display:flex;flex-direction:column}header{padding:10px 16px;display:flex;align-items:center;gap:16px;flex-wrap:wrap;border-bottom:1px solid #34435b}strong{color:#66d9ff}span{color:#b6c5db;flex:1}a{color:#bceaff;border:1px solid #55718d;border-radius:5px;padding:7px 12px;text-decoration:none}a:hover{background:#263951}iframe{border:0;width:100%;flex:1;min-height:0}#status{font-size:12px;color:#ffd98e}
+</style>
+</head>
+<body>
+<header><strong>myRTOS Simulator</strong><span>Pause, step, and explore virtual inputs. Send HELP in the UART console.</span><a href="trace.csv" download="myrtos-trace.csv" id="download">Download trace</a><a href="vnc.html?autoconnect=1&amp;resize=scale" target="_blank" rel="noopener">Open desktop</a><div id="status" role="status"></div></header>
+<iframe title="Interactive simulator desktop" src="vnc.html?autoconnect=1&amp;resize=scale" allow="fullscreen"></iframe>
+<script>
+document.getElementById('download').addEventListener('click',async event=>{
+ event.preventDefault();
+ const status=document.getElementById('status');
+ try {
+  const response=await fetch('trace.csv',{cache:'no-store'});
+  if(!response.ok) throw new Error('Click Export trace inside the simulator first.');
+  const url=URL.createObjectURL(await response.blob());
+  const link=document.createElement('a');link.href=url;link.download='myrtos-trace.csv';link.click();
+  setTimeout(()=>URL.revokeObjectURL(url),1000);status.textContent='Trace downloaded.';
+ }catch(error){status.textContent=error.message;}
+});
+</script>
+</body></html>

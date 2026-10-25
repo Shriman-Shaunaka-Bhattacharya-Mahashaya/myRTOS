@@ -3,6 +3,8 @@
 
 namespace myrtos::hw {
 
+void VirtualInterruptController::reset() noexcept { CriticalSectionGuard guard; for (auto& line : lines_) line = {}; }
+
 VirtualInterruptController& VirtualInterruptController::instance() noexcept {
     static VirtualInterruptController s_instance;
     return s_instance;

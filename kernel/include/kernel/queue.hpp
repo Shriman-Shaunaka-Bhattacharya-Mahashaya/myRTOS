@@ -1,7 +1,9 @@
 #pragma once
+#include "port/port.hpp"
 
 #include "kernel/types.hpp"
 #include "kernel/list.hpp"
+#include <type_traits>
 
 namespace myrtos {
 
@@ -41,11 +43,11 @@ public:
     /// Interrupt-safe receive
     Status receive_from_isr(void* item_out, bool* out_higher_prio_task_woken = nullptr) noexcept;
 
-    [[nodiscard]] bool empty() const noexcept { return count_ == 0; }
-    [[nodiscard]] bool full() const noexcept { return count_ == capacity_; }
-    [[nodiscard]] size_t count() const noexcept { return count_; }
-    [[nodiscard]] size_t capacity() const noexcept { return capacity_; }
-    [[nodiscard]] size_t item_size() const noexcept { return item_size_; }
+    [[nodiscard]] bool empty() const noexcept { CriticalSectionGuard guard; return count_ == 0; }
+    [[nodiscard]] bool full() const noexcept { CriticalSectionGuard guard; return count_ == capacity_; }
+    [[nodiscard]] size_t count() const noexcept { CriticalSectionGuard guard; return count_; }
+    [[nodiscard]] size_t capacity() const noexcept { CriticalSectionGuard guard; return capacity_; }
+    [[nodiscard]] size_t item_size() const noexcept { CriticalSectionGuard guard; return item_size_; }
 
 private:
     void copy_item_in(const void* item_data) noexcept;
@@ -67,6 +69,8 @@ private:
  */
 template <typename T, size_t Capacity>
 class StaticQueue {
+    static_assert(Capacity > 0);
+    static_assert(std::is_trivially_copyable_v<T>, "Queue messages must be trivially copyable");
 public:
     StaticQueue() noexcept
         : raw_queue_(reinterpret_cast<uint8_t*>(storage_), sizeof(T), Capacity) {}
@@ -95,9 +99,9 @@ public:
         return raw_queue_.receive_from_isr(&item_out, woken);
     }
 
-    [[nodiscard]] bool empty() const noexcept { return raw_queue_.empty(); }
-    [[nodiscard]] bool full() const noexcept { return raw_queue_.full(); }
-    [[nodiscard]] size_t count() const noexcept { return raw_queue_.count(); }
+    [[nodiscard]] bool empty() const noexcept { CriticalSectionGuard guard; return raw_queue_.empty(); }
+    [[nodiscard]] bool full() const noexcept { CriticalSectionGuard guard; return raw_queue_.full(); }
+    [[nodiscard]] size_t count() const noexcept { CriticalSectionGuard guard; return raw_queue_.count(); }
 
 private:
     alignas(T) uint8_t storage_[sizeof(T) * Capacity];

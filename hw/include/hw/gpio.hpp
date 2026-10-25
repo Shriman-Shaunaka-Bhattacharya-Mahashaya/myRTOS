@@ -34,6 +34,7 @@ struct GpioPinConfig {
  */
 class VirtualGpio {
 public:
+    void reset() noexcept;
     static VirtualGpio& instance() noexcept;
 
     VirtualGpio(const VirtualGpio&) = delete;

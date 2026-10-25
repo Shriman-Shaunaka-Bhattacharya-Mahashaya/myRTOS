@@ -55,10 +55,12 @@ Status Port::create_context(TaskControlBlock* task, TaskFunction entry, void* ar
     return Status::Ok;
 }
 
-void Port::context_switch(TaskControlBlock*, TaskControlBlock* target) noexcept {
+void Port::context_switch(TaskControlBlock* from, TaskControlBlock* target) noexcept {
     // All scheduler mutations for this transition precede the unlock. Each suspended
     // stack retains its own depth; another context always starts with no host lock.
+    const auto tick = Scheduler::instance().tick_count();
     const auto depth = host::suspend_critical();
+    host::transition(from ? from->id : 0, target->id, tick);
     if (host::stop_requested()) SwitchToFiber(main_fiber);
     SwitchToFiber(target->port_context);
     host::restore_critical(depth);
@@ -70,10 +72,12 @@ Status Port::start_first_task(TaskControlBlock* first) noexcept {
     main_fiber = already_fiber ? GetCurrentFiber() : ConvertThreadToFiber(nullptr);
     if (!main_fiber) return Status::Error;
     host::begin();
-    SwitchToFiber(first->port_context);
+    host::transition(0, first->id, Scheduler::instance().tick_count());
+    if (!host::stop_requested()) SwitchToFiber(first->port_context);
     // Stop abandons the suspended task stacks only after releasing their host locks.
     {
         CriticalSectionGuard guard;
+        Scheduler::instance().cleanup_tasks();
         release_contexts();
     }
     if (!already_fiber) ConvertFiberToThread();

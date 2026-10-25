@@ -11,6 +11,7 @@ constexpr size_t MAX_TASKS = 64;
 /**
  * @brief Telemetry snapshot for UI and diagnostic logging.
  */
+struct SwitchEvent { uint64_t sequence{0}; TickType tick{0}; TaskId from{0}; TaskId to{0}; };
 struct TaskMetrics {
     TaskId id{INVALID_TASK_ID};
     char name[TASK_NAME_MAX_LEN]{};
@@ -23,10 +24,11 @@ struct TaskMetrics {
     float stack_usage_percent{0.0f};
     uint64_t runtime_ticks{0};
     uint32_t context_switch_count{0};
+    TickType last_run_tick{0}; // Tick at the most recent dispatch; count=0 means never run.
 };
 
 /**
- * @brief Preemptive, Priority-Based O(1) Bitmap Scheduler.
+ * @brief Priority-based bitmap scheduler with cooperative host execution.
  */
 class Scheduler {
 public:
@@ -49,11 +51,12 @@ public:
         TaskId* out_task_id = nullptr
     ) noexcept;
 
-    /// Starts the preemptive scheduler (transfers execution to the highest priority task).
+    /// Starts the scheduler (transfers execution to the highest priority task).
     Status start() noexcept;
 
     /// Removes a returned task from scheduling. Called by the host task thunk.
     void finish_current_task() noexcept;
+    void cleanup_tasks() noexcept;
 
     /// Checks if scheduler has started and is actively dispatching.
     [[nodiscard]] bool is_running() const noexcept;
@@ -77,7 +80,7 @@ public:
     void change_task_priority(TaskControlBlock* task, Priority new_priority) noexcept;
 
     /// Blocks the current task on an event queue (e.g. semaphore, mutex, queue).
-    void block_current_task(IntrusiveList& wait_queue, TickType timeout_ticks) noexcept;
+    Status block_current_task(IntrusiveList& wait_queue, TickType timeout_ticks) noexcept;
 
     /// Unblocks a task from an event queue and places it back in the Ready queue.
     void unblock_task(TaskControlBlock* task, Status result = Status::Ok) noexcept;
@@ -88,6 +91,9 @@ public:
     /// Unlocks scheduler preemption.
     void unlock() noexcept;
 
+    bool can_block() const noexcept;
+    Status set_initial_tick(TickType tick) noexcept;
+    size_t get_trace(SwitchEvent* output, size_t capacity, uint64_t& dropped) const noexcept;
     [[nodiscard]] TaskControlBlock* current_task() const noexcept { return current_task_; }
     [[nodiscard]] TickType tick_count() const noexcept;
     [[nodiscard]] size_t task_count() const noexcept;
@@ -96,6 +102,11 @@ public:
     size_t get_task_metrics(TaskMetrics* out_buffer, size_t max_count, TickType* sampled_tick = nullptr) const noexcept;
 
 private:
+    friend class Mutex;
+    void record_switch(TaskId from, TaskId to) noexcept;
+    static constexpr size_t TRACE_CAPACITY = 2048;
+    SwitchEvent trace_[TRACE_CAPACITY]{};
+    uint64_t trace_sequence_{0};
     Scheduler() noexcept;
 
     /// Evaluates highest-priority ready task and switches context if necessary.
@@ -112,7 +123,7 @@ private:
     IntrusiveList ready_queues_[MAX_PRIORITIES]{};
     uint32_t ready_bitmap_{0}; // Bit P is set if ready_queues_[P] has at least one task
 
-    // Delayed (sleeping) tasks ordered by ascending wake_tick
+    // Delayed tasks scanned with wrap-safe deadline comparisons
     IntrusiveList delayed_list_{};
 
     // Suspended tasks

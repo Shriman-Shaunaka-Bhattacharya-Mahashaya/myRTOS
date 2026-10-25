@@ -4,6 +4,7 @@
 #include <vector>
 #include "kernel/types.hpp"
 #include "kernel/scheduler.hpp"
+#include "demo/session.hpp"
 
 struct GLFWwindow;
 
@@ -31,7 +32,7 @@ public:
     bool init(int width = 1280, int height = 820, const char* title = "myRTOS Interactive Simulation Dashboard") noexcept;
 
     /// Runs the interactive rendering and simulation loop until window is closed.
-    void run(size_t frame_limit = 0) noexcept;
+    void run(DemoSession& session, size_t frame_limit = 0) noexcept;
 
     /// Shuts down UI contexts and destroys window.
     void shutdown() noexcept;
@@ -48,12 +49,17 @@ private:
 
     TaskMetrics task_metrics_[MAX_TASKS + 1]{};
     size_t task_metric_count_{0};
+    uint32_t previous_switches_[MAX_TASKS + 1]{};
+    double activity_until_[MAX_TASKS + 1]{};
     TickType sampled_tick_{0};
 
     // Simulation state
-    bool is_running_{true};
-    bool is_sim_paused_{false};
-    int sim_speed_multiplier_{1};
+    DemoSession* session_{nullptr};
+    unsigned generation_{0};
+    std::string feedback_;
+    SwitchEvent switch_events_[512]{};
+    size_t switch_count_{0};
+    uint64_t omitted_events_{0};
 
     // UART Console buffers
     char uart_input_buffer_[256]{};

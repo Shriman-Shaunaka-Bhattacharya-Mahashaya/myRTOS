@@ -4,6 +4,8 @@
 
 namespace myrtos::hw {
 
+void VirtualUart::reset() noexcept { CriticalSectionGuard guard; rx_head_ = rx_tail_ = rx_count_ = tx_head_ = tx_tail_ = tx_count_ = 0; }
+
 VirtualUart& VirtualUart::instance() noexcept {
     static VirtualUart s_instance;
     return s_instance;
@@ -35,9 +37,10 @@ Status VirtualUart::read_byte(uint8_t* out_byte) noexcept {
     return Status::Ok;
 }
 
-void VirtualUart::simulate_incoming_data(const char* data, size_t length) noexcept {
+Status VirtualUart::simulate_incoming_data(const char* data, size_t length) noexcept {
     CriticalSectionGuard guard;
-    if (data == nullptr || length == 0) return;
+    if (data == nullptr || length == 0) return Status::InvalidParam;
+    if (length > UART_BUFFER_SIZE - rx_count_) return Status::ResourceExhausted;
 
     for (size_t i = 0; i < length && rx_count_ < UART_BUFFER_SIZE; ++i) {
         rx_buffer_[rx_tail_] = static_cast<uint8_t>(data[i]);
@@ -47,6 +50,7 @@ void VirtualUart::simulate_incoming_data(const char* data, size_t length) noexce
 
     // Trigger Virtual UART RX Interrupt
     VirtualInterruptController::instance().trigger_irq(IRQ_UART_RX);
+    return Status::Ok;
 }
 
 size_t VirtualUart::pull_transmitted_data(char* buffer_out, size_t max_len) noexcept {

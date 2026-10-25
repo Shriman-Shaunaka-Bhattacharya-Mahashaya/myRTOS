@@ -24,7 +24,7 @@ function(myrtos_target_defaults target)
 endfunction()
 
 # -------------------------------------------------------------
-# 1. RTOS Kernel Core Library (Freestanding, No Exceptions/RTTI)
+# 1. RTOS Kernel Core Library (host simulation, no exceptions/RTTI)
 # -------------------------------------------------------------
 add_library(myrtos_kernel STATIC
     kernel/src/scheduler.cpp
@@ -89,6 +89,13 @@ target_include_directories(myrtos_hw PUBLIC
 )
 
 target_link_libraries(myrtos_hw PUBLIC myrtos_kernel myrtos_port)
+# Declare the actual static-library cycle so linkers rescan all three archives.
+target_link_libraries(myrtos_kernel PUBLIC myrtos_port)
+target_link_libraries(myrtos_port PUBLIC myrtos_hw)
+
+add_library(myrtos_demo STATIC demo/src/session.cpp)
+target_include_directories(myrtos_demo PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/demo/include)
+target_link_libraries(myrtos_demo PUBLIC myrtos_kernel myrtos_port myrtos_hw Threads::Threads)
 
 # -------------------------------------------------------------
 # 4. Third-Party UI: GLFW & Dear ImGui
@@ -156,6 +163,7 @@ if(MYRTOS_BUILD_UI)
         ui/src/dashboard.cpp
     )
 
+    target_link_libraries(myrtos_ui PUBLIC myrtos_demo)
     target_include_directories(myrtos_ui PUBLIC
         ${CMAKE_CURRENT_SOURCE_DIR}/ui/include
         ${CMAKE_CURRENT_SOURCE_DIR}/kernel/include
@@ -188,6 +196,14 @@ endif()
 # 6. Verification Test Suite Executable
 # -------------------------------------------------------------
 if(BUILD_TESTING)
+    foreach(suite IN ITEMS transition_integration demo_integration kernel_regressions mutex_integration deadline_integration)
+        add_executable(myrtos_${suite} tests/${suite}.cpp)
+        target_include_directories(myrtos_${suite} PRIVATE tests)
+        target_link_libraries(myrtos_${suite} PRIVATE myrtos_demo)
+        myrtos_target_defaults(myrtos_${suite})
+        add_test(NAME regression.${suite} COMMAND myrtos_${suite})
+        set_tests_properties(regression.${suite} PROPERTIES TIMEOUT 20)
+    endforeach()
     add_executable(myrtos_tests tests/main_tests.cpp)
     target_link_libraries(myrtos_tests PRIVATE myrtos_kernel myrtos_port myrtos_hw)
     foreach(case IN ITEMS intrusive_list stack_watermark priority_bitmap memory_pool message_queue virtual_hardware virtual_uart)
@@ -220,6 +236,7 @@ if(MYRTOS_BUILD_EXAMPLES)
     )
 
     target_link_libraries(myrtos_sim PRIVATE
+        myrtos_demo
         myrtos_kernel
         myrtos_port
         myrtos_hw
@@ -251,7 +268,7 @@ if(MYRTOS_BUILD_UI)
 
 endif()
 
-foreach(target IN ITEMS myrtos_kernel myrtos_port myrtos_hw myrtos_ui myrtos_tests myrtos_scheduler_tests myrtos_sim myrtos_dashboard)
+foreach(target IN ITEMS myrtos_demo myrtos_kernel myrtos_port myrtos_hw myrtos_ui myrtos_tests myrtos_scheduler_tests myrtos_sim myrtos_dashboard)
     if(TARGET ${target})
         myrtos_target_defaults(${target})
     endif()

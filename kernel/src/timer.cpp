@@ -25,7 +25,7 @@ SoftwareTimer::SoftwareTimer(
 
 Status SoftwareTimer::start() noexcept {
     CriticalSectionGuard guard;
-    if (callback_ == nullptr || period_ticks_ == 0) {
+    if (callback_ == nullptr || period_ticks_ == 0 || period_ticks_ > MAX_FINITE_WAIT) {
         return Status::InvalidParam;
     }
 
@@ -73,7 +73,7 @@ TimerManager& TimerManager::instance() noexcept {
 
 void TimerManager::register_timer(SoftwareTimer* timer) noexcept {
     if (timer == nullptr) return;
-    active_timers_.insert_sorted_ascending(timer->node());
+    active_timers_.push_back(timer->node());
 }
 
 void TimerManager::unregister_timer(SoftwareTimer* timer) noexcept {
@@ -81,23 +81,32 @@ void TimerManager::unregister_timer(SoftwareTimer* timer) noexcept {
     active_timers_.remove(timer->node());
 }
 
+void TimerManager::reset() noexcept {
+    CriticalSectionGuard guard;
+    while (auto* node = active_timers_.pop_front())
+        static_cast<SoftwareTimer*>(node->owner)->is_active_ = false;
+}
 void TimerManager::process_timers(TickType current_tick) noexcept {
-    while (!active_timers_.empty()) {
-        ListNode* head = active_timers_.head();
-        if (head->value <= current_tick) {
-            active_timers_.remove(head);
-            auto* timer = static_cast<SoftwareTimer*>(head->owner);
-            timer->trigger_callback();
-
-            if (timer->is_active()) {
-                // If periodic, schedule next expiration
-                timer->start();
-            }
-        } else {
-            // Since active_timers_ is sorted ascending, earliest timer is in the future
-            break;
+    CriticalSectionGuard guard;
+    // Restart the search after callbacks, which may alter any timer's membership.
+    while (true) {
+        SoftwareTimer* due = nullptr;
+        auto* node = active_timers_.head();
+        for (size_t i = 0; i < active_timers_.size(); ++i, node = node->next) {
+            auto* timer = static_cast<SoftwareTimer*>(node->owner);
+            if (tick_reached(current_tick, timer->expiry_tick_)) { due = timer; break; }
         }
+        if (!due) return;
+        active_timers_.remove(due->node());
+        due->is_active_ = due->mode_ == TimerMode::Periodic;
+        if (due->is_active_) {
+            due->expiry_tick_ = current_tick + due->period_ticks_;
+            due->node_.value = due->expiry_tick_;
+            active_timers_.push_back(due->node());
+        }
+        const auto callback = due->callback_;
+        auto* argument = due->argument_;
+        callback(argument); // Do not touch due afterwards: it may have been destroyed.
     }
 }
-
 } // namespace myrtos

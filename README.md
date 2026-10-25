@@ -2,7 +2,7 @@
 
 myRTOS is a custom RTOS simulator written in C++20 and built with CMake. It provides a place to develop and explore task scheduling, communication between tasks, and virtual hardware through a graphical dashboard.
 
-The project focuses on Windows and Linux, with a Docker configuration for accessing the desktop dashboard through a browser. Development is progressing from tested components toward a complete interactive simulation environment.
+The project focuses on Windows and Linux, with a Docker configuration for accessing the desktop dashboard through a browser. The dashboard provides pause/resume, exact single-tick stepping, adjustable speed, stop/reset, UART commands, GPIO responses, and recorded scheduler events. See the [demonstration walkthrough](docs/demo-walkthrough.md).
 
 ## What the simulator contains
 
@@ -19,7 +19,7 @@ The project focuses on Windows and Linux, with a Docker configuration for access
 | Dashboard | Presents task information, sampled execution activity, GPIO controls, and a UART console using Dear ImGui and GLFW. |
 | Tests | Check individual components through CTest in Debug and Release builds. |
 
-These components are the foundation for the simulator's ongoing integration work. The [development roadmap](#development-roadmap) describes the next capabilities being completed.
+The [demonstration walkthrough](docs/demo-walkthrough.md) connects these components in a repeatable input/output scenario.
 
 ## Understanding tasks and simulated time
 
@@ -27,7 +27,7 @@ An RTOS organizes work into **tasks**. A task might collect sensor readings, pro
 
 A **tick** represents a unit of time inside the simulation. The examples use a nominal one-millisecond tick. The host operating system controls when the application receives CPU time, so simulated ticks and elapsed real time are separate concepts.
 
-The Windows port uses Win32 fibers, and the Linux port uses `ucontext`. A shared host runtime uses a monotonic clock to advance ticks on the simulation thread. Both preserve task execution contexts so tasks can resume where they left off. Pending virtual interrupts are processed at scheduling points in the host port; task code needs to cooperate by reaching those points.
+The Windows port uses Win32 fibers, and the Linux port uses `ucontext`. A shared host runtime uses a monotonic clock to advance ticks on the simulation thread. Both preserve task execution contexts so tasks can resume where they left off. Pending virtual interrupts and clock ticks are processed when idle polls the host runtime. Application tasks must sleep or block often enough to let idle run; repeatedly yielding while remaining ready can still starve it.
 
 ## Build and test without the UI
 
@@ -61,15 +61,16 @@ Headless builds skip the graphics dependencies and work without a display. See [
 
 ### What the tests cover
 
-CTest currently registers nine cases:
+CTest currently registers fourteen cases:
 
 - Seven component cases: intrusive lists, synthetic stack markers, priority bitmap selection, memory pool operations, nonblocking message queues, GPIO/interrupt dispatch, and UART buffers.
 - One expected-failure case that verifies a failed test check produces a failing process.
 - One scheduler integration case covering task communication, timeout cleanup, returning tasks, responsive telemetry, and stop/restart.
+- Five regression scenarios covering demo controls and input/output, timer/pool/list validation, mutex inheritance, queue deadlines across tick rollover, and live transition teaching controls.
 
-The checks remain active in Debug and Release builds. Each case has a ten-second timeout. Running `myrtos_tests` directly executes the seven component cases and currently reports 84 evaluated checks.
+The checks remain active in Debug and Release builds. The original nine cases have ten-second timeouts; the five regression scenarios have twenty-second timeouts. Running `myrtos_tests` directly executes the seven component cases and currently reports 84 evaluated checks.
 
-These tests cover individual components and a running-task scenario. Broader mutex, timer, overload, and interactive-control tests are part of the roadmap.
+The regression scenarios exercise the same session used by the UI. See [testing.md](docs/testing.md) for test scope and platform validation.
 
 Headless Debug and Release tests have passed on Windows with MinGW and on Linux inside a Docker container. The GitHub Actions workflow in [.github/workflows/build.yml](.github/workflows/build.yml) defines Windows and Ubuntu build/test jobs.
 
@@ -115,21 +116,29 @@ Visual Studio and other multi-configuration generators place executables in a co
 
 ### Explore the dashboard
 
-The example application creates Producer, Consumer, and Heartbeat tasks. Its dashboard provides:
+The example application creates Producer, Consumer, Heartbeat, and Inputs tasks. Its dashboard provides:
 
-- A task table showing states, priorities, and context-switch counts from a consistent snapshot. Host stack measurements are marked unavailable.
-- A rolling view of task activity sampled by the UI.
+- A task table showing states, priorities, context-switch counts, last-dispatch ticks, and recent-activity highlights.
+- A bounded record of actual scheduler switches, with CSV export.
 - HIGH/LOW buttons for virtual input pins and indicators for pin states.
 - A UART output area showing text produced by tasks.
 - A text field that injects data into the virtual UART receive buffer.
 
 **GPIO** means simple digital input/output signals, such as a button or LED. **UART** represents serial communication; here it uses in-memory buffers instead of physical wires. Application tasks and interrupt handlers determine how injected inputs are processed.
 
-Simulation controls and complete input-to-output scenarios are being connected to the execution engine as described in the roadmap below.
+Choose 0.0005x (one tick every two seconds), 0.001x (one tick per second), or 0.005x (five ticks per second) for very slow inspection. Choose 0.01x in the Speed dropdown for approximately ten ticks per second. Task rows briefly turn green after execution; Dispatch tick shows when the scheduler last selected a task. Blocked means waiting, and Idle is labeled Waiting clock or Paused to explain its role.
+
+Pause waits for worker acknowledgement. Step advances exactly one tick while paused. Reset starts a fresh paused run. Send `PING` for `PONG`, `LED ON`/`LED OFF` to control pin 1, or `HELP` for commands. Toggling input pin 2 changes pin 1 and produces a console response after step or resume. Pin 0 remains the heartbeat.
+
+### Watch the scheduler in slow motion
+
+Choose **Teaching mode: Manual**, then **Reset**. The selected task stays **Running (held)** until you click **Next transition**. Other tasks show their committed Ready/Blocked states. Choose **Automatic** and a hold duration to advance without clicking, or **Off** to return to normal clock controls. Reset preserves teaching mode. The UI remains responsive and Stop releases a held worker.
+
+These are live execution holds at committed task-switch boundaries, including startup. Teaching pauses do not advance simulation time or build up overdue ticks. For a first demonstration, use 1x clock speed and the default two-second hold. See the [walkthrough](docs/demo-walkthrough.md#live-scheduler-teaching-mode).
 
 ### Command-line demo
 
-The `myrtos_sim` executable runs the example tasks and prints task information and UART output in the terminal:
+The `myrtos_sim` executable runs the example tasks and prints UART output in the terminal:
 
 ```powershell
 # Windows, Ninja or Makefile build
@@ -156,10 +165,10 @@ docker compose up --build
 The Dockerfile builds the application and runs its registered CTest suite. The startup script launches a virtual display and the desktop dashboard. Open:
 
 ```text
-http://localhost:8080/vnc.html
+http://localhost:8080/
 ```
 
-Use the noVNC page's **Connect** control to access the virtual desktop.
+The page connects automatically and scales the virtual desktop to the browser window. Click Export trace inside the desktop, then Download trace in the page header to save the recent scheduler events as CSV. Compose exposes it on localhost only; the container runs as an unprivileged user and supervises its display and network processes.
 
 The browser displays and controls the desktop application through this pipeline:
 
@@ -199,8 +208,10 @@ Set all three options to `OFF` to build only the project libraries.
 | `port/` | Windows/Linux context switching and host timing support. |
 | `hw/` | Virtual interrupt controller, GPIO, and UART. |
 | `ui/` | Dashboard rendering and input widgets. |
+| `demo/` | Shared application session, task ownership, command parser, and input/output scenario. |
 | `examples/` | Graphical and command-line application entry points. |
-| `tests/` | Component cases and the always-active test checker. |
+| `tests/` | Component, integration and regression cases, with an always-active test checker. |
+| `web/` | Browser wrapper embedding the desktop and providing trace downloads. |
 | `docs/` | Build and testing documentation. |
 | `.github/workflows/` | Continuous-integration configuration. |
 | `CMakeLists.txt` | Native build targets and options. |
@@ -208,17 +219,16 @@ Set all three options to `OFF` to build only the project libraries.
 
 The kernel contains scheduling and communication logic; the port supplies host execution support; virtual peripherals model inputs and outputs; the UI presents information and accepts interaction.
 
-## Development roadmap
+## Execution scope
 
-The next stages focus on:
+The supported demo uses cooperative host tasks. Custom task code must allow idle to run; the simulator cannot forcibly interrupt an infinite loop. Stop releases task contexts without unwinding suspended C++ stacks, so persistent resources belong outside task-local scopes. Host stack utilization is not measured, and tick samples are not exact CPU-time measurements.
 
-1. A controllable simulation clock and tests that exercise running tasks.
-2. Safe task switching, blocking, timeouts, lifecycle transitions, and communication between the UI and simulation.
-3. Timer, priority-inheritance, memory-pool, and resource-lifecycle correctness.
-4. Connected pause/resume, single-step, speed, reset, and stop controls.
-5. Input-driven examples, recorded event traces, and repeatable scenarios.
-6. Broader native UI validation on Windows/Linux and container/browser validation.
+Finite waits are limited to 2,147,483,647 ticks to support wrap-safe deadline comparisons. Priority 31 is reserved for idle. Pools use constant-time allocation and validated linear-time release. Queues accept trivially copyable message types. Timer callbacks execute during tick processing and must not block.
+
+The trace is bounded; arbitrary user-defined scenario replay and embedded hardware ports are separate extensions. The [demo walkthrough](docs/demo-walkthrough.md) defines the supported interview scenario and its expected results.
 
 ## Documentation
 
 See [docs/testing.md](docs/testing.md) for build commands, test behavior, and validation results, and [docs/host-runtime.md](docs/host-runtime.md) for task execution and shutdown rules.
+
+In teaching mode, Dispatch tick and switch counts record scheduler selection before the held target resumes. The Activity cell says Selected for that held target; it does not claim that the target has already executed its task body.

@@ -1,6 +1,6 @@
-# Building and testing the simulator foundation
+# Building and testing the simulator
 
-The suite includes seven component cases, a check of the test harness, and a scheduler integration scenario. The integration scenario runs tasks on a worker thread while another thread samples telemetry and exchanges virtual I/O; it checks IPC, timeouts, returning tasks, and stop/restart. Further timer, mutex, and UI-control coverage is planned.
+The suite contains 14 CTest cases: seven component cases, a harness check, a scheduler integration case, and five regression scenarios. These cover pause/step/reset/speed, UART and GPIO responses, timer lifetime, pool validation, mutex inheritance, queue deadlines across clock rollover, and live teaching-mode holds. The scheduler integration case also checks concurrent UI access and stop/restart.
 
 ## Build without a graphical environment
 
@@ -66,7 +66,7 @@ The default build still includes the existing dashboard. Enabling the UI uses lo
 
 ## Reading results
 
-CTest runs seven component cases in separate processes, one test of the checking mechanism itself, and one scheduler integration case. Each process has a 10-second timeout, so a hung test becomes a failure rather than hanging indefinitely.
+CTest runs each case in a separate process. Original cases have 10-second timeouts; the five additional regression scenarios have 20-second timeouts. A hung test becomes a failure rather than hanging indefinitely.
 
 The `harness.rejects_failed_check` case deliberately executes `CHECK(false)`. It passes in CTest only when that process fails. This guards against accidentally disabling test checks in Release builds. It is not an eighth kernel feature test. Directly running `myrtos_tests --fail-check` is expected to exit with an error.
 
@@ -80,7 +80,21 @@ The `harness.rejects_failed_check` case deliberately executes `CHECK(false)`. It
 
 The application Dockerfile now runs the registered CTest suite during image construction. Use `docker compose build` to build the browser-accessible application image, then `docker compose up` to run it. The scheduler integration case also runs here. Interactive controls require their own UI checks.
 
-Validation on 2026-10-13: Windows MinGW GNU 16.2.0 and Linux GNU 13.3.0 passed all nine CTest cases in Debug and Release. Both platforms also passed the 120-frame dashboard smoke test with an advancing clock and clean shutdown. Linux builds used the existing local application image with networking disabled, a read-only source mount, and fresh builds in the container's temporary directory; the GUI ran under Xvfb. This verifies a relocated Linux build and rendering, but does not constitute a fresh application-image build, browser interaction test, or MSVC validation.
+## Recorded validation
+
+Latest teaching-mode validation on 2026-10-25:
+
+| Check | Recorded result |
+| --- | --- |
+| Windows MinGW GNU 16.2.0, Debug and Release | All 14 CTest cases passed. |
+| Linux GNU 13.3.0, Debug and Release | All 14 CTest cases passed. Release ran during Docker image construction; Debug ran in a disposable network-disabled container. |
+| Windows dashboard smoke test | 120 frames, advancing clock and clean shutdown passed, including the final teaching-label update. |
+| Browser through Edge/noVNC | Manual/reset at tick zero, Ready/Running (held)/Blocked snapshots, next-transition progression, automatic progression and Stop checked. Final label review confirmed Dispatch tick and Selected. |
+| Earlier browser interaction checks | Clock pause/step, UART PING/PONG and LED commands, GPIO2-to-LED behavior, speed presets, reset/stop, resizing and CSV download checked. |
+
+Earlier Linux dashboard smoke runs passed before teaching mode was added; the latest Linux GUI was exercised through the browser. These are local results, not a claim of remote CI success or local MSVC/other-browser qualification. No runtime tests were rerun for this documentation-only update.
+
+For a repeatable interactive check with expected results, follow [demo-walkthrough.md](demo-walkthrough.md). CTest checks the shared execution engine; browser rehearsal additionally checks the display and input transport.
 
 ## Portable presets and dashboard smoke test
 
@@ -96,6 +110,39 @@ Use `headless-debug` or `headless-release` in all three commands for the corresp
 
 To exercise the actual rendering loop and shutdown, run `myrtos_dashboard --smoke-test` from the generated desktop directory. It renders 120 frames, checks that the simulation clock advanced, requests stop, and joins the simulation thread. This requires an OpenGL display; Linux containers can provide one with Xvfb. An external test timeout should be used to detect a freeze. The normal invocation runs until you close the window.
 
-The host runtime advances ticks using a monotonic clock on the scheduler thread at cooperative scheduling points. Stop is handled at those points too. Tasks that never yield, sleep, block, or return still require a separate execution strategy for forced interruption. Host stack measurements are displayed as unavailable: Windows fibers use OS-owned stacks, and sampling an executing Linux stack would be unsafe.
+The host runtime advances ticks using a monotonic clock on the scheduler thread at cooperative scheduling points. Stop is handled at those points too. Clock polling and pause acknowledgement occur at idle. Tasks must allow idle to run by sleeping or blocking; repeatedly yielding while remaining ready can still starve idle. Forced interruption requires a separate execution strategy. Host stack usage is not measured: Windows fibers use OS-owned stacks, and sampling an executing Linux stack would be unsafe.
 
 See [host-runtime.md](host-runtime.md) for thread ownership, locking, and shutdown rules when writing tasks.
+
+## Regression scenarios
+
+The five `regression.*` cases have 20-second process timeouts; the seven component cases, harness case and scheduler integration case have 10-second timeouts.
+
+| Case | What it checks |
+| --- | --- |
+| `regression.demo_integration` | Pause and exact clock step, UART command replies/errors and GPIO outputs, buffer rejection, speed comparison, fractional-speed timing down to 0.0005x, invalid/non-finite speed rejection, dispatch telemetry, repeated reset and prompt stop during a slow clock wait. |
+| `regression.kernel_regressions` | List membership, pool layout and duplicate-release rejection, invalid blocking contexts, wrap-safe helpers, timer modes and callback/object lifetime. |
+| `regression.mutex_integration` | Recursive locks, multiple held mutexes, chained inheritance, timed-out donations and ownership transfer. |
+| `regression.deadline_integration` | Original queue deadlines under contention across rollover, sleep wakeups and lock cleanup when a task returns. |
+| `regression.transition_integration` | Initial selection held at tick zero, live Ready/Running/Blocked snapshots, UART consumed only after release, one-dispatch manual progression, automatic delay, no catch-up after a long hold, and stop/reset before initial context entry and at later holds. |
+
+To run only the teaching scenario after building:
+
+```sh
+ctest --test-dir out/desktop -R regression.transition_integration --output-on-failure --no-tests=error
+```
+
+For a multi-configuration generator, add `-C Debug` or `-C Release`. Clock tests use host-timing tolerances rather than requiring exact nanosecond scheduling. They verify the clock behavior and supported task contracts, not hardware real-time guarantees.
+
+## Interactive acceptance check
+
+1. With Teaching Off, Reset, Step, then send PING and step again. Confirm PONG and an exact one-tick increment per step.
+2. Send LED ON/OFF, and toggle GPIO2 with a step after each action. Confirm console responses and pin1 state.
+3. Try slow clock presets. Confirm the selected speed, sensible tick spacing and responsive Pause/Stop. A default sensor interval takes five minutes at 0.0005x; absence of rapid messages is expected.
+4. Choose Manual, then Reset. Confirm Inputs is Running (held), other application tasks are Ready, and tick remains zero while waiting.
+5. Advance through Producer, Consumer, Heartbeat and Idle using Next transition. Check that previous work becomes Blocked and that UART output appears only after its producing tasks run.
+6. Choose Automatic and adjust Hold seconds. Confirm timed progression. Change to Off and verify normal clock Pause/Step become available without a teaching-time catch-up burst.
+7. Export the trace and, in the browser, Download trace. Check CSV columns `sequence,tick,from_task,to_task`. A newest event can represent a teaching-held selection before execution resumes.
+8. Stop while held. Confirm termination, then Reset to verify a fresh session. Close the native window or use `docker compose down` for the browser service.
+
+The automated suite checks shared engine behavior. This rehearsal separately checks rendering, controls and browser input transport. See [demo-walkthrough.md](demo-walkthrough.md) for expected states and recovery commands.
