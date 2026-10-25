@@ -225,7 +225,7 @@ The supported demo uses cooperative host tasks. Custom task code must allow idle
 
 Finite waits are limited to 2,147,483,647 ticks to support wrap-safe deadline comparisons. Priority 31 is reserved for idle. Pools use constant-time allocation and validated linear-time release. Queues accept trivially copyable message types. Timer callbacks execute during tick processing and must not block.
 
-The trace is bounded; arbitrary user-defined scenario replay and embedded hardware ports are separate extensions. The [demo walkthrough](docs/demo-walkthrough.md) defines the supported interview scenario and its expected results.
+The trace is bounded; arbitrary user-defined scenario replay and embedded hardware ports are separate extensions. The [demo walkthrough](docs/demo-walkthrough.md) defines the supported scenario and its expected results.
 
 ## Documentation
 
